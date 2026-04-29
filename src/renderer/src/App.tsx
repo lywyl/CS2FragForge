@@ -1,0 +1,31 @@
+import { useState } from 'react'
+
+function App(): JSX.Element {
+  const [count, setCount] = useState(0)
+
+  return (
+    <div className="container">
+      <div>Electron + Vite + React</div>
+      <div>
+        <a href="https://electron-vite.org" target="_blank" rel="noreferrer">
+          electron-vite
+        </a>
+        +
+        <a href="https://react.dev" target="_blank" rel="noreferrer">
+          React
+        </a>
+      </div>
+      <div className="card">
+        <button onClick={() => setCount((count) => count + 1)}>count is {count}</button>
+        <p>
+          Edit <code>src/renderer/src/App.tsx</code> and save to test HMR
+        </p>
+      </div>
+      <p className="read-the-docs">
+        Click on the Electron, Vite, React logos to learn more
+      </p>
+    </div>
+  )
+}
+
+export default App
