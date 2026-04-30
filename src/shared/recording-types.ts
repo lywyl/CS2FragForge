@@ -1,10 +1,13 @@
 export type RecordingStatus =
   | 'idle'
   | 'preparing'
+  | 'connecting-obs'
+  | 'configuring-obs'
   | 'launching-cs2'
   | 'waiting-load'
   | 'recording'
   | 'stopping'
+  | 'splitting'
   | 'done'
   | 'error'
   | 'cancelled'
@@ -41,6 +44,12 @@ export interface RecordingHighlight {
   score: number
 }
 
+export interface ObsConfig {
+  host: string
+  port: number
+  password?: string
+}
+
 export interface RecordingRequest {
   demoPath: string
   highlights: RecordingHighlight[]
@@ -49,6 +58,7 @@ export interface RecordingRequest {
   postRoll: number
   tickRate: number
   outputDir?: string
+  obsConfig: ObsConfig
 }
 
 export interface RecordingResult {

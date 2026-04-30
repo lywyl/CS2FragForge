@@ -1,8 +1,8 @@
 # CS2demo_cutter — 当前开发状态
 
 **最后更新**: 2026-04-30
-**版本**: v2.2
-**状态**: 开发中 — 录制方案切换：startmovie → OBS WebSocket
+**版本**: v2.3
+**状态**: 开发中 — OBS WebSocket 录制方案已实现，等待 Wave 2 编排器集成
 
 ## 快速开始（给新开发者）
 
@@ -20,7 +20,7 @@ npm run dev        # 启动 Electron + Vite 开发服务器
 ### 当前可用功能
 1. **Welcome 页** — 拖放/选择 `.dem` 文件或导入视频
 2. **Project 页** — 自动检测 highlights（3K/4K/ACE/Clutch/Eco）+ 一键录制
-3. **Recording 页** — OBS WebSocket 自动录制（OBS 自动配置场景 → CS2 启动 → OBS 录制 → FFmpeg 切割）
+3. **Recording 页** — OBS WebSocket 自动录制（OBS 连接 → 场景配置 → CS2 单次启动 → 连续录制 → FFmpeg 切割）
 4. **Editor 页** — 视频播放 + 裁剪（In/Out 点 + 帧步进）+ 音频轨道导入 + 时间线编辑
 5. **Export 页** — FFmpeg 导出（裁剪 → 合并 → 音频混合），支持取消和进度条
 6. **Settings 页** — 设置持久化（electron-store）+ CS2 路径自动检测 + 受控组件 + 重置默认值 + Toast 通知
@@ -199,11 +199,11 @@ npm run dev        # 启动 Electron + Vite 开发服务器
 | `src/main/ffmpeg.ts` | FFmpeg/FFprobe 路径解析 |
 | `src/main/export-service.ts` | FFmpeg 导出服务（trim/concat/audio mix/progress/cancel） |
 | `src/main/recording-orchestrator.ts` | 录制编排器（状态机，协调 OBS 录制 + CS2 启动/终止） |
-| `src/main/obs-service.ts` | OBS WebSocket v5 客户端（连接/自动配置场景/录制控制） |
-| `src/main/cfg-writer.ts` | CS2 CFG 文件生成（demo_gototick + spec_player + 组合 autoexec） |
+| `src/main/obs-service.ts` | OBS WebSocket v5 服务（连接/场景管理/Game Capture/录制控制/测试连接） |
+| `src/main/cfg-writer.ts` | CS2 CFG 文件生成（组合 autoexec.cfg：demo_gototick + spec_player + wait 序列） |
 | `src/main/demo-launcher.ts` | CS2 进程管理（复制 demo、启动、终止） |
 | `src/main/console-log-watcher.ts` | CS2 console.log 轮询监听（检测 demo 加载状态） |
-| `src/main/video-post-processor.ts` | MP4 文件验证/移动/清理 |
+| `src/main/video-post-processor.ts` | FFmpeg 时间戳切割（OBS 录制 → 独立片段）/ 清理 |
 | `src/main/cs2-path-resolver.ts` | Steam 注册表 + CS2 路径发现 + VDF 解析 |
 | `src/main/settings-store.ts` | electron-store 设置持久化（get/set/reset） |
 
@@ -256,7 +256,7 @@ npm run dev        # 启动 Electron + Vite 开发服务器
 
 | 类别 | 数量 | 状态 |
 |------|------|------|
-| JS/TS 单元测试 (Vitest) | 58 | ✅ 全部通过 |
+| JS/TS 单元测试 (Vitest) | 91 | ✅ 全部通过 |
 | Python 后端测试 (pytest) | 24 | ✅ 全部通过 |
 | ESLint 检查 | - | ⚠️ 7 pre-existing errors (无关文件) |
 | TypeScript 编译 | - | ✅ 通过 |
@@ -274,7 +274,7 @@ npm run dev        # 启动 Electron + Vite 开发服务器
 | P1 | Phase 5.3 | 1d | ✅ 完成 | CS2 黄色主题 + 动画 + 响应式优化 |
 | P1 | CI/CD | 0.5d | ✅ 完成 | GitHub Actions 流水线 + lefthook pre-commit test |
 | P0 | Phase 2.2 | 1d | ✅ 完成 | CS2 控制 (CFG 生成 + 进程启动) |
-| P0 | Phase 2.5 | 2d | 🔧 待实现 | OBS WebSocket 集成（替代 startmovie，含自动场景配置 + 单次会话连续录制 + FFmpeg 切割） |
+| P0 | Phase 2.5 | 2d | 🔧 进行中 | OBS WebSocket 集成（替代 startmovie，含自动场景配置 + 单次会话连续录制 + FFmpeg 切割） |
 | P0 | Phase 2.4 | 1d | ✅ 完成 | 录制编排状态机 (RecordingOrchestrator) |
 | P0 | Phase 3.4 | 0.5d | ✅ 完成 | 录制页 UI（自动开始+进度+状态列表+取消+完成） |
 | P2 | Phase 6 AI 评分 (可选) | 2d | ⬜ 待开始 | OpenAI/Claude API 集成 |

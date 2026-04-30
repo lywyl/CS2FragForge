@@ -164,6 +164,25 @@ function registerIpcHandlers(): void {
     recordingOrchestrator = null
   })
 
+  // OBS test connection
+  ipcMain.handle(
+    IPC_CHANNELS.OBS_TEST_CONNECTION,
+    async (_event, config: { host: string; port: number; password?: string }) => {
+      const OBSWebSocket = (await import('obs-websocket-js')).default
+      const obs = new OBSWebSocket()
+      try {
+        const url = `ws://${config.host}:${config.port}`
+        await obs.connect(url, config.password || undefined)
+        const version = await obs.call('GetVersion')
+        await obs.disconnect()
+        return { success: true, version: version.obsVersion }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        return { success: false, error: message }
+      }
+    }
+  )
+
   // Export handlers
   let exportService: ExportService | null = null
 

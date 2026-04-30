@@ -1,23 +1,33 @@
 import path from 'path'
+import fs from 'fs/promises'
 import { DemoLauncher } from './demo-launcher'
 import { ConsoleLogWatcher } from './console-log-watcher'
-import { writeHighlightCfg } from './cfg-writer'
-import { VideoPostProcessor } from './video-post-processor'
+import { OBSService } from './obs-service'
+import { writeCombinedCfg, restoreAutoexecCfg } from './cfg-writer'
+import { splitVideo, cleanupObsRecording } from './video-post-processor'
+import { getFfmpegPath } from './ffmpeg'
 import type {
   RecordingRequest,
   RecordingResult,
   RecordingClipResult,
   RecordingProgress,
   RecordingStatus,
-  HighlightRecordingStatus,
-  RecordingHighlight
+  HighlightRecordingStatus
 } from '../shared/recording-types'
+
+const DEMO_LOAD_TIMEOUT_MS = 45_000
+const OBS_SCENE_NAME = 'CS2FragForge'
+const OBS_SOURCE_NAME = 'CS2 Game Capture'
+const BUFFER_SEC = 5
 
 export class RecordingOrchestrator {
   private isCancelled = false
+  private obsService: OBSService | null = null
   private demoLauncher: DemoLauncher | null = null
   private consoleWatcher: ConsoleLogWatcher | null = null
-  private cfgFiles: string[] = []
+  private cfgDir: string | null = null
+  private autoexecPath: string | null = null
+  private obsRecordingActive = false
 
   constructor(private onProgress: (progress: RecordingProgress) => void) {}
 
@@ -27,33 +37,187 @@ export class RecordingOrchestrator {
     }
 
     this.isCancelled = false
+    this.obsRecordingActive = false
     const clips: RecordingClipResult[] = []
 
-    this.reportProgress('preparing', 0, 0, request.highlights.length, 'preparing', 'Preparing recording...')
-
     try {
-      // Copy demo to CS2 replays directory
+      // Step 1: Connect to OBS
+      this.reportProgress('connecting-obs', 5, 0, request.highlights.length, 'preparing', 'Connecting to OBS...')
+      this.obsService = new OBSService()
+
+      try {
+        await this.obsService.connect(request.obsConfig)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'OBS connection failed'
+        this.reportProgress('error', 0, 0, request.highlights.length, 'error', msg)
+        return { success: false, clips, error: msg }
+      }
+
+      if (this.isCancelled) return this.cancelResult(clips, request.highlights.length)
+
+      // Step 2: Configure OBS scene + source
+      this.reportProgress('configuring-obs', 10, 0, request.highlights.length, 'preparing', 'Configuring OBS scene...')
+      try {
+        await this.obsService.ensureScene(OBS_SCENE_NAME)
+        await this.obsService.ensureGameCaptureSource(OBS_SCENE_NAME, OBS_SOURCE_NAME)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'OBS configuration failed'
+        await this.obsService.disconnect()
+        this.reportProgress('error', 0, 0, request.highlights.length, 'error', msg)
+        return { success: false, clips, error: msg }
+      }
+
+      if (this.isCancelled) return this.cancelResult(clips, request.highlights.length)
+
+      // Step 3: Copy demo + write combined CFG
+      this.reportProgress('preparing', 15, 0, request.highlights.length, 'preparing', 'Preparing demo and config...')
       this.demoLauncher = new DemoLauncher(request.cs2Path)
       const demoName = await this.demoLauncher.copyDemoToReplays(request.demoPath)
 
-      const cfgDir = path.join(request.cs2Path, 'game', 'csgo', 'cfg')
+      this.cfgDir = path.join(request.cs2Path, 'game', 'csgo', 'cfg')
       const outputDir = request.outputDir ?? path.join(path.dirname(request.demoPath), 'clips')
 
-      for (let i = 0; i < request.highlights.length; i++) {
-        if (this.isCancelled) break
+      this.autoexecPath = await writeCombinedCfg(
+        {
+          highlights: request.highlights.map((h) => ({
+            id: h.id,
+            playerName: h.playerName,
+            tickStart: h.tickStart,
+            tickEnd: h.tickEnd,
+            round: h.round,
+            type: h.type
+          })),
+          tickRate: request.tickRate,
+          preRoll: request.preRoll,
+          postRoll: request.postRoll
+        },
+        this.cfgDir
+      )
 
-        const highlight = request.highlights[i]
-        const clip = await this.recordSingleHighlight(
-          highlight,
-          i,
-          request.highlights.length,
-          request,
-          demoName,
-          cfgDir,
-          outputDir
-        )
-        clips.push(clip)
+      if (this.isCancelled) return this.cancelResult(clips, request.highlights.length)
+
+      // Step 4: Launch CS2
+      this.reportProgress('launching-cs2', 20, 0, request.highlights.length, 'launching', 'Launching CS2...')
+      try {
+        await this.demoLauncher.launch(demoName, 'autoexec.cfg')
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'CS2 launch failed'
+        await this.obsService.disconnect()
+        this.reportProgress('error', 0, 0, request.highlights.length, 'error', msg)
+        return { success: false, clips, error: msg }
       }
+
+      if (this.isCancelled) return this.cancelResult(clips, request.highlights.length)
+
+      // Step 5: Wait for demo load
+      this.reportProgress('waiting-load', 25, 0, request.highlights.length, 'loading', 'Waiting for demo to load...')
+      const loadResult = await this.waitForDemoLoad(request.cs2Path)
+
+      if (loadResult.timedOut) {
+        console.warn('[Orchestrator] Demo load timed out — proceeding anyway')
+        // Safety fallback: send exec via stdin
+        this.demoLauncher.sendCommand('exec autoexec.cfg')
+      }
+
+      if (this.isCancelled) return this.cancelResult(clips, request.highlights.length)
+
+      // Step 6: Start OBS recording
+      this.reportProgress('recording', 30, 0, request.highlights.length, 'recording', 'Starting OBS recording...')
+      try {
+        await this.obsService.startRecording()
+        this.obsRecordingActive = true
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'OBS recording start failed'
+        await this.cleanup(request)
+        this.reportProgress('error', 0, 0, request.highlights.length, 'error', msg)
+        return { success: false, clips, error: msg }
+      }
+
+      // Step 7: Wait for total duration
+      const totalDuration = this.calculateTotalDuration(request)
+      this.reportProgress('recording', 35, 0, request.highlights.length, 'recording',
+        `Recording ${request.highlights.length} highlights (${Math.ceil(totalDuration)}s)...`)
+      await this.waitWithProgress(totalDuration, request.highlights.length)
+
+      if (this.isCancelled) return this.cancelResult(clips, request.highlights.length)
+
+      // Step 8: Stop OBS recording
+      this.reportProgress('stopping', 70, 0, request.highlights.length, 'stopping', 'Stopping OBS recording...')
+      let obsOutputPath: string | null = null
+      try {
+        obsOutputPath = await this.obsService.stopRecording()
+        this.obsRecordingActive = false
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'OBS recording stop failed'
+        await this.cleanup(request)
+        this.reportProgress('error', 0, 0, request.highlights.length, 'error', msg)
+        return { success: false, clips, error: msg }
+      }
+
+      if (!obsOutputPath) {
+        const msg = 'OBS did not return output path'
+        await this.cleanup(request)
+        this.reportProgress('error', 0, 0, request.highlights.length, 'error', msg)
+        return { success: false, clips, error: msg }
+      }
+
+      if (this.isCancelled) return this.cancelResult(clips, request.highlights.length)
+
+      // Step 9: FFmpeg split
+      this.reportProgress('splitting', 75, 0, request.highlights.length, 'preparing', 'Splitting video into clips...')
+
+      const timestamps = this.buildTimestamps(request)
+      const ffmpegPath = getFfmpegPath()
+
+      try {
+        const outputPaths = await splitVideo(obsOutputPath, timestamps, outputDir, ffmpegPath)
+
+        // Build clip results
+        for (let i = 0; i < request.highlights.length; i++) {
+          const hl = request.highlights[i]
+          const outputPath = outputPaths[i] ?? ''
+          const highlightDuration = (hl.tickEnd - hl.tickStart) / request.tickRate
+          const duration = request.preRoll + highlightDuration + request.postRoll
+
+          let success = false
+          try {
+            await fs.access(outputPath)
+            success = true
+          } catch {
+            // file doesn't exist
+          }
+
+          clips.push({
+            highlightId: hl.id,
+            outputPath,
+            duration,
+            success
+          })
+        }
+
+        // Cleanup OBS recording file
+        await cleanupObsRecording(obsOutputPath)
+      } catch (err) {
+        // Partial success: some clips may have been created
+        const msg = err instanceof Error ? err.message : 'FFmpeg split failed'
+        console.warn(`[Orchestrator] FFmpeg split error: ${msg}`)
+
+        // Fill in any missing clips as failed
+        for (let i = clips.length; i < request.highlights.length; i++) {
+          const hl = request.highlights[i]
+          const highlightDuration = (hl.tickEnd - hl.tickStart) / request.tickRate
+          clips.push({
+            highlightId: hl.id,
+            outputPath: '',
+            duration: request.preRoll + highlightDuration + request.postRoll,
+            success: false,
+            error: msg
+          })
+        }
+      }
+
+      // Step 10: Cleanup
+      await this.cleanup(request)
 
       const successCount = clips.filter((c) => c.success).length
       this.reportProgress('done', 100, request.highlights.length, request.highlights.length, 'done',
@@ -62,10 +226,9 @@ export class RecordingOrchestrator {
       return { success: successCount > 0, clips }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Recording failed'
+      await this.cleanup(request)
       this.reportProgress('error', 0, 0, request.highlights.length, 'error', message)
       return { success: false, clips, error: message }
-    } finally {
-      await this.cleanup()
     }
   }
 
@@ -73,122 +236,6 @@ export class RecordingOrchestrator {
     this.isCancelled = true
     this.demoLauncher?.terminate()
     this.consoleWatcher?.stop()
-  }
-
-  private async recordSingleHighlight(
-    highlight: RecordingHighlight,
-    index: number,
-    total: number,
-    request: RecordingRequest,
-    demoName: string,
-    cfgDir: string,
-    outputDir: string
-  ): Promise<RecordingClipResult> {
-    const highlightLabel = `${highlight.playerName} - ${highlight.type} - Round ${highlight.round}`
-
-    try {
-      // Step 1: Generate CFG — this file will be exec'd after demo loads
-      this.reportProgress('preparing', this.percent(index, total), index + 1, total, 'preparing',
-        `Generating recording config for: ${highlightLabel}`)
-
-      const movieFilename = `cs2fragforge_${highlight.id}`
-      const cfgName = `cs2fragforge_${highlight.id}.cfg`
-      const cfgPath = await writeHighlightCfg({
-        tickStart: highlight.tickStart,
-        tickRate: request.tickRate,
-        playerName: highlight.playerName,
-        preRoll: request.preRoll,
-        highlightId: highlight.id,
-        movieFilename
-      }, cfgDir)
-      this.cfgFiles.push(cfgPath)
-
-      // Step 2: Launch CS2 with +playdemo and +exec (CFG runs after demo loads via Source 2 command queue)
-      this.reportProgress('launching-cs2', this.percent(index, total), index + 1, total, 'launching',
-        `Starting CS2 (${index + 1}/${total}): ${highlightLabel}`)
-
-      await this.demoLauncher!.launch(demoName, cfgName)
-
-      // Step 3: Wait for demo to load (console.log monitoring)
-      this.reportProgress('waiting-load', this.percent(index, total), index + 1, total, 'loading',
-        `Waiting for CS2 to load demo (${index + 1}/${total}): ${highlightLabel}`)
-
-      const loadResult = await this.waitForDemoLoad(request.cs2Path)
-
-      if (this.isCancelled) {
-        return { highlightId: highlight.id, outputPath: '', duration: 0, success: false, error: 'Cancelled' }
-      }
-
-      // Step 3.5: Safety fallback — send exec via stdin in case +exec didn't fire.
-      // If demo load timed out, the CFG may not have executed; stdin injection is our backup.
-      await new Promise((r) => setTimeout(r, 1000))
-      this.demoLauncher!.sendCommand(`exec ${cfgName}`)
-      if (loadResult.timedOut) {
-        console.warn('[Orchestrator] Injected exec via stdin after demo load timeout')
-      }
-
-      // Step 4: Wait for recording duration
-      const highlightDuration = (highlight.tickEnd - highlight.tickStart) / request.tickRate
-      const totalDuration = request.preRoll + highlightDuration + request.postRoll
-
-      this.reportProgress('recording', this.percent(index, total), index + 1, total, 'recording',
-        `Recording clip ${index + 1}/${total}: ${highlightLabel} (${Math.ceil(totalDuration)}s)`)
-
-      await this.waitWithProgress(totalDuration, index, total, request.highlights.length)
-
-      if (this.isCancelled) {
-        return { highlightId: highlight.id, outputPath: '', duration: 0, success: false, error: 'Cancelled' }
-      }
-
-      // Step 5: Stop recording (terminate CS2)
-      this.reportProgress('stopping', this.percent(index, total), index + 1, total, 'stopping',
-        `Stopping CS2 and saving clip ${index + 1}/${total}: ${highlightLabel}`)
-
-      await this.demoLauncher!.terminate()
-
-      // Wait for CS2 to fully exit and flush file
-      this.reportProgress('stopping', this.percent(index, total), index + 1, total, 'stopping',
-        `Waiting for CS2 to save video file (${index + 1}/${total})...`)
-      await new Promise((r) => setTimeout(r, 3000))
-
-      // Step 6: Move output file
-      this.reportProgress('stopping', this.percent(index, total), index + 1, total, 'stopping',
-        `Processing video file (${index + 1}/${total}): ${highlightLabel}`)
-      const clipName = `${highlight.playerName}_${highlight.type}_R${highlight.round}_${highlight.id}.mp4`
-      const outputPath = await VideoPostProcessor.finalizeVideo(
-        request.cs2Path, movieFilename, outputDir, clipName
-      )
-
-      // Cleanup CFG
-      await VideoPostProcessor.cleanupCfgFile(cfgPath)
-      this.cfgFiles = this.cfgFiles.filter((f) => f !== cfgPath)
-
-      if (!outputPath) {
-        return {
-          highlightId: highlight.id,
-          outputPath: '',
-          duration: totalDuration,
-          success: false,
-          error: 'Output file not found after recording — startmovie may not have run. Check that CS2 supports startmovie h264.'
-        }
-      }
-
-      return {
-        highlightId: highlight.id,
-        outputPath,
-        duration: totalDuration,
-        success: true
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown error'
-      return {
-        highlightId: highlight.id,
-        outputPath: '',
-        duration: 0,
-        success: false,
-        error: message
-      }
-    }
   }
 
   private async waitForDemoLoad(cs2Path: string): Promise<{ timedOut: boolean }> {
@@ -213,24 +260,54 @@ export class RecordingOrchestrator {
       this.consoleWatcher = watcher
       watcher.start()
 
-      // Timeout fallback: 45s (generous for slow machines loading CS2 + demo)
       setTimeout(() => {
         if (!resolved) {
           resolved = true
           watcher.stop()
-          console.warn('[Orchestrator] Demo load timed out after 45s — proceeding anyway')
+          console.warn(`[Orchestrator] Demo load timed out after ${DEMO_LOAD_TIMEOUT_MS / 1000}s`)
           resolve({ timedOut: true })
         }
-      }, 45000)
+      }, DEMO_LOAD_TIMEOUT_MS)
     })
   }
 
-  private async waitWithProgress(
-    seconds: number,
-    highlightIndex: number,
-    total: number,
-    totalHighlights: number
-  ): Promise<void> {
+  private calculateTotalDuration(request: RecordingRequest): number {
+    let total = 0
+    for (const hl of request.highlights) {
+      const highlightDuration = (hl.tickEnd - hl.tickStart) / request.tickRate
+      total += request.preRoll + highlightDuration + request.postRoll
+    }
+    return total + BUFFER_SEC
+  }
+
+  private buildTimestamps(request: RecordingRequest): Array<{
+    id: string
+    startSec: number
+    durationSec: number
+    outputName: string
+  }> {
+    const timestamps: Array<{ id: string; startSec: number; durationSec: number; outputName: string }> = []
+    let offset = 0
+
+    for (const hl of request.highlights) {
+      const highlightDuration = (hl.tickEnd - hl.tickStart) / request.tickRate
+      const duration = request.preRoll + highlightDuration + request.postRoll
+      const clipName = `${hl.playerName}_${hl.type}_R${hl.round}_${hl.id}.mp4`
+
+      timestamps.push({
+        id: hl.id,
+        startSec: offset,
+        durationSec: duration,
+        outputName: clipName
+      })
+
+      offset += duration
+    }
+
+    return timestamps
+  }
+
+  private async waitWithProgress(seconds: number, totalHighlights: number): Promise<void> {
     return new Promise<void>((resolve) => {
       const startTime = Date.now()
       const totalMs = seconds * 1000
@@ -243,11 +320,12 @@ export class RecordingOrchestrator {
         }
 
         const elapsed = Date.now() - startTime
-        const highlightPercent = Math.min(100, (elapsed / totalMs) * 100)
-        const overallPercent = ((highlightIndex + highlightPercent / 100) / total) * 100
+        const percent = Math.min(100, (elapsed / totalMs) * 100)
+        // Map recording progress to 30-70% range
+        const overallPercent = 30 + (percent * 0.4)
 
         const remaining = Math.max(0, Math.ceil((totalMs - elapsed) / 1000))
-        this.reportProgress('recording', overallPercent, highlightIndex + 1, totalHighlights, 'recording',
+        this.reportProgress('recording', overallPercent, 0, totalHighlights, 'recording',
           `Recording... ${remaining}s remaining`)
 
         if (elapsed >= totalMs) {
@@ -258,31 +336,51 @@ export class RecordingOrchestrator {
     })
   }
 
-  private async cleanup(): Promise<void> {
+  private async cleanup(request: RecordingRequest): Promise<void> {
+    // Stop OBS recording if active
+    if (this.obsRecordingActive && this.obsService?.isConnected) {
+      try {
+        await this.obsService.stopRecording()
+      } catch {
+        // ignore
+      }
+      this.obsRecordingActive = false
+    }
+
+    // Disconnect OBS
+    try {
+      await this.obsService?.disconnect()
+    } catch {
+      // ignore
+    }
+
+    // Terminate CS2
     try {
       await this.demoLauncher?.terminate()
     } catch {
       // ignore
     }
 
+    // Stop console watcher
     try {
       await this.consoleWatcher?.stop()
     } catch {
       // ignore
     }
 
-    for (const cfgPath of this.cfgFiles) {
+    // Restore autoexec.cfg
+    if (this.cfgDir) {
       try {
-        await VideoPostProcessor.cleanupCfgFile(cfgPath)
+        await restoreAutoexecCfg(this.cfgDir)
       } catch {
         // ignore
       }
     }
-    this.cfgFiles = []
   }
 
-  private percent(index: number, total: number): number {
-    return Math.round((index / total) * 100)
+  private cancelResult(clips: RecordingClipResult[], totalHighlights: number): RecordingResult {
+    this.reportProgress('cancelled', 0, 0, totalHighlights, 'skipped', 'Recording cancelled')
+    return { success: false, clips, error: 'Cancelled' }
   }
 
   private reportProgress(
@@ -295,7 +393,7 @@ export class RecordingOrchestrator {
   ): void {
     this.onProgress({
       status,
-      percent,
+      percent: Math.round(percent),
       currentHighlight,
       totalHighlights,
       highlightStatus,

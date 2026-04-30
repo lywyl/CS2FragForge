@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Settings, Cpu, Monitor, Globe, RotateCcw, Loader2, AlertCircle, Search } from 'lucide-react'
+import { Settings, Cpu, Monitor, Globe, RotateCcw, Loader2, AlertCircle, Search, Video } from 'lucide-react'
 import { useTranslation } from '../i18n'
 import { useSettingsStore } from '../stores/useSettingsStore'
 import { toast } from '../stores/useToastStore'
@@ -15,6 +15,7 @@ export const SettingsPage: React.FC = () => {
   const resetSettings = useSettingsStore((s) => s.resetSettings)
 
   const [isDetecting, setIsDetecting] = useState(false)
+  const [isTestingObs, setIsTestingObs] = useState(false)
   const [showResetConfirm, setShowResetConfirm] = useState(false)
 
   useEffect(() => {
@@ -64,6 +65,27 @@ export const SettingsPage: React.FC = () => {
       toast.error(t('settings.notDetected'))
     } finally {
       setIsDetecting(false)
+    }
+  }
+
+  const handleTestObsConnection = async () => {
+    if (!settings) return
+    setIsTestingObs(true)
+    try {
+      const result = await window.electronAPI.obsTestConnection({
+        host: settings.obsHost,
+        port: settings.obsPort,
+        password: settings.obsPassword
+      })
+      if (result.success) {
+        toast.success(t('settings.obsConnected', { version: result.version }))
+      } else {
+        toast.error(t('settings.obsConnectionFailed', { error: result.error }))
+      }
+    } catch (err) {
+      toast.error(t('settings.obsConnectionFailed', { error: String(err) }))
+    } finally {
+      setIsTestingObs(false)
     }
   }
 
@@ -160,6 +182,58 @@ export const SettingsPage: React.FC = () => {
               className="px-4 py-2 text-sm bg-cs2-elevated hover:bg-cs2-border border border-cs2-border rounded text-cs2-text transition-colors"
             >
               {t('settings.browse')}
+            </button>
+          </div>
+        </section>
+
+        {/* OBS WebSocket Connection */}
+        <section className="bg-cs2-surface rounded-lg p-4 border border-cs2-border">
+          <div className="flex items-center gap-2 mb-3">
+            <Video className="w-5 h-5 text-cs2-gold" />
+            <h3 className="text-lg font-medium text-cs2-text">{t('settings.obsTitle')}</h3>
+          </div>
+          <p className="text-sm text-cs2-text-muted mb-3">
+            {t('settings.obsDescription')}
+          </p>
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs text-cs2-text-muted mb-1">{t('settings.obsHost')}</label>
+              <input
+                type="text"
+                value={settings.obsHost}
+                onChange={(e) => handleChange('obsHost', e.target.value)}
+                className="w-full bg-cs2-elevated border border-cs2-border rounded px-3 py-2 text-sm text-cs2-text focus:outline-none focus:border-cs2-gold transition-colors"
+                placeholder="127.0.0.1"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-cs2-text-muted mb-1">{t('settings.obsPort')}</label>
+              <input
+                type="number"
+                value={settings.obsPort}
+                onChange={(e) => handleChange('obsPort', Number(e.target.value))}
+                className="w-32 bg-cs2-elevated border border-cs2-border rounded px-3 py-2 text-sm text-cs2-text focus:outline-none focus:border-cs2-gold transition-colors"
+                min={1}
+                max={65535}
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-cs2-text-muted mb-1">{t('settings.obsPassword')}</label>
+              <input
+                type="password"
+                value={settings.obsPassword}
+                onChange={(e) => handleChange('obsPassword', e.target.value)}
+                className="w-full bg-cs2-elevated border border-cs2-border rounded px-3 py-2 text-sm text-cs2-text focus:outline-none focus:border-cs2-gold transition-colors"
+                placeholder="Optional"
+              />
+            </div>
+            <button
+              onClick={handleTestObsConnection}
+              disabled={isTestingObs}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm bg-cs2-elevated hover:bg-cs2-border border border-cs2-border rounded text-cs2-text transition-colors disabled:opacity-50"
+            >
+              {isTestingObs ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+              {t('settings.testConnection')}
             </button>
           </div>
         </section>

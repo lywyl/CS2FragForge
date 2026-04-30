@@ -1,55 +1,68 @@
 import fs from 'fs/promises'
 import path from 'path'
 
-export interface CfgConfig {
-  tickStart: number
-  tickRate: number
+export interface HighlightSegment {
+  id: string
   playerName: string
+  tickStart: number
+  tickEnd: number
+  round: number
+  type: string
+}
+
+export interface CombinedCfgConfig {
+  highlights: HighlightSegment[]
+  tickRate: number
   preRoll: number
-  highlightId: string
-  movieFilename: string
-}
-
-export function buildCfgContent(config: CfgConfig): string {
-  const preRollTicks = Math.round(config.preRoll * config.tickRate)
-  const gotoTick = Math.max(0, config.tickStart - preRollTicks)
-
-  return [
-    `// CS2FragForge auto-generated CFG for highlight ${config.highlightId}`,
-    `// Player: ${config.playerName}, Tick: ${config.tickStart}`,
-    '',
-    '// Clean HUD',
-    'cl_draw_only_deathnotices 1',
-    'r_drawviewmodel 0',
-    '',
-    '// Navigate to highlight start (with pre-roll)',
-    `demo_gototick ${gotoTick}`,
-    '',
-    '// Spectate the highlight player',
-    `spec_player ${config.playerName}`,
-    '',
-    '// Recording setup',
-    'host_framerate 30',
-    `startmovie ${config.movieFilename} h264`
-  ].join('\n') + '\n'
-}
-
-export async function writeHighlightCfg(config: CfgConfig, cfgDir: string): Promise<string> {
-  const cfgName = `cs2fragforge_${config.highlightId}.cfg`
-  const cfgPath = path.join(cfgDir, cfgName)
-
-  await fs.mkdir(cfgDir, { recursive: true })
-  await fs.writeFile(cfgPath, buildCfgContent(config), 'utf-8')
-
-  return cfgPath
+  postRoll: number
+  hostFramerate?: number // default 30
 }
 
 /**
- * Write commands to autoexec.cfg which CS2 always loads on startup.
- * More reliable than +exec launch parameter.
- * Returns the path to autoexec.cfg.
+ * Generate combined CFG content for all highlights in one CS2 session.
  */
-export async function writeAutoexecCfg(config: CfgConfig, cfgDir: string): Promise<string> {
+export function buildCombinedCfgContent(config: CombinedCfgConfig): string {
+  const hostFramerate = config.hostFramerate ?? 30
+  const lines: string[] = []
+
+  // Header
+  lines.push('// CS2FragForge auto-generated combined autoexec.cfg')
+  lines.push(`// Highlights: ${config.highlights.length}`)
+  lines.push('')
+
+  // Global settings
+  lines.push('cl_draw_only_deathnotices 1')
+  lines.push('r_drawviewmodel 0')
+  lines.push(`host_framerate ${hostFramerate}`)
+  lines.push('')
+
+  // Generate highlight blocks
+  for (let i = 0; i < config.highlights.length; i++) {
+    const hl = config.highlights[i]
+    const gotoTick = Math.max(0, hl.tickStart - config.preRoll * config.tickRate)
+    const highlightDurationSec = (hl.tickEnd - hl.tickStart) / config.tickRate
+    const totalDurationSec = config.preRoll + highlightDurationSec + config.postRoll
+    const waitFrames = Math.ceil(totalDurationSec * hostFramerate)
+
+    lines.push(`// Highlight ${i + 1}: ${hl.playerName} - ${hl.type} - Round ${hl.round}`)
+    lines.push(`demo_gototick ${gotoTick}`)
+    lines.push(`spec_player ${hl.playerName}`)
+    lines.push(`wait ${waitFrames}`)
+    lines.push('')
+  }
+
+  return lines.join('\n')
+}
+
+/**
+ * Write combined CFG for all highlights to autoexec.cfg.
+ * Backs up existing autoexec.cfg if present.
+ * Returns path to written file.
+ */
+export async function writeCombinedCfg(
+  config: CombinedCfgConfig,
+  cfgDir: string
+): Promise<string> {
   const autoexecPath = path.join(cfgDir, 'autoexec.cfg')
 
   // Backup existing autoexec.cfg if present
@@ -62,7 +75,7 @@ export async function writeAutoexecCfg(config: CfgConfig, cfgDir: string): Promi
   }
 
   await fs.mkdir(cfgDir, { recursive: true })
-  await fs.writeFile(autoexecPath, buildCfgContent(config), 'utf-8')
+  await fs.writeFile(autoexecPath, buildCombinedCfgContent(config), 'utf-8')
 
   return autoexecPath
 }

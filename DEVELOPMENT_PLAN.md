@@ -12,10 +12,10 @@
 | 维度 | 状态 |
 |------|------|
 | 技术栈 | Electron 33 + Vite + React 18 + TypeScript + Tailwind + Python FastAPI + demoparser2 + obs-websocket-js |
-| 当前阶段 | Phase 2 🔧 (录制管线重构), Phase 4 ✅, Phase 5.2 ✅, Phase 5.3 ✅, CI/CD ✅ |
+| 当前阶段 | Phase 2.5 🔧 (OBS WebSocket集成中), Phase 4 ✅, Phase 5.2 ✅, Phase 5.3 ✅, CI/CD ✅ |
 | 核心功能 | Demo解析 + Highlights检测 + **OBS WebSocket 录制** + 前端UI + FFmpeg导出管线 + 音频混合 + 中英切换 + 设置持久化 + Toast通知 |
 | 可打包性 | ⚠️ extraResources已配置, embed Python需构建 |
-| 测试覆盖 | Python 24 tests (85% cov) + JS 58 tests 全部通过 |
+| 测试覆盖 | Python 24 tests (85% cov) + JS 91 tests 全部通过 |
 | UI完成度 | ~95% (全页面功能完成，含录制页，仅剩 AI 评分可选功能) |
 
 **下一步**：
@@ -96,16 +96,16 @@ Phase 0 ──► Phase 1 ──► Phase 2 ──► Phase 3 ──► Phase 4 
 #### 2.3 OBS WebSocket 集成 (Phase 2.5)
 | # | 任务 | 文件 | 工时 | 优先级 | 状态 |
 |---|------|------|------|--------|------|
-| 2.3.1 | OBSService 模块（连接/断开/录制控制） | `obs-service.ts` | 0.5d | P0 | ⬜ |
-| 2.3.2 | OBS 自动配置场景（创建场景 + CS2 Game Capture） | `obs-service.ts` | 0.5d | P0 | ⬜ |
-| 2.3.3 | 组合 autoexec.cfg 生成器（多 highlight + wait 序列） | `cfg-writer.ts` | 0.5d | P0 | ⬜ |
-| 2.3.4 | FFmpeg 切割服务（按时间戳切割单录制为多片段） | `video-post-processor.ts` | 0.5d | P0 | ⬜ |
-| 2.3.5 | RecordingOrchestrator 重构（单次会话 + OBS 录制） | `recording-orchestrator.ts` | 1d | P0 | ⬜ |
-| 2.3.6 | Settings 添加 OBS 连接配置 + 测试连接按钮 | `SettingsPage.tsx` | 0.5d | P1 | ⬜ |
-| 2.3.7 | RecordingPage 传递 OBS 设置 | `RecordingPage.tsx` | 0.25d | P1 | ⬜ |
-| 2.3.8 | IPC 通道 + preload 桥接（OBS 测试连接） | `ipc.ts` + `preload` | 0.25d | P1 | ⬜ |
-| 2.3.9 | i18n 字符串更新 | `en.ts` + `zh.ts` | 0.25d | P1 | ⬜ |
-| 2.3.10 | OBSService 单元测试 | `obs-service.test.ts` | 0.5d | P1 | ⬜ |
+| 2.3.1 | OBSService 模块（连接/断开/录制控制） | `obs-service.ts` | 0.5d | P0 | ✅ |
+| 2.3.2 | OBS 自动配置场景（创建场景 + CS2 Game Capture） | `obs-service.ts` | 0.5d | P0 | ✅ |
+| 2.3.3 | 组合 autoexec.cfg 生成器（多 highlight + wait 序列） | `cfg-writer.ts` | 0.5d | P0 | ✅ |
+| 2.3.4 | FFmpeg 切割服务（按时间戳切割单录制为多片段） | `video-post-processor.ts` | 0.5d | P0 | ✅ |
+| 2.3.5 | RecordingOrchestrator 重构（单次会话 + OBS 录制） | `recording-orchestrator.ts` | 1d | P0 | 🔧 进行中 |
+| 2.3.6 | Settings 添加 OBS 连接配置 + 测试连接按钮 | `SettingsPage.tsx` | 0.5d | P1 | ✅ |
+| 2.3.7 | RecordingPage 传递 OBS 设置 | `RecordingPage.tsx` | 0.25d | P1 | ✅ |
+| 2.3.8 | IPC 通道 + preload 桥接（OBS 测试连接） | `ipc.ts` + `preload` | 0.25d | P1 | ✅ |
+| 2.3.9 | i18n 字符串更新 | `en.ts` + `zh.ts` | 0.25d | P1 | ✅ |
+| 2.3.10 | OBSService 单元测试 | `obs-service.test.ts` | 0.5d | P1 | ✅ |
 
 #### 2.4 录制编排 (状态机)
 | # | 任务 | 文件 | 工时 | 优先级 | 状态 |

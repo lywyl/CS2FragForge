@@ -28,6 +28,9 @@ export const IPC_CHANNELS = {
   RECORDING_STOP: 'recording:stop',
   RECORDING_PROGRESS: 'recording:progress',
 
+  // OBS
+  OBS_TEST_CONNECTION: 'obs:testConnection',
+
   // Export
   EXPORT_START: 'export:start',
   EXPORT_CANCEL: 'export:cancel',

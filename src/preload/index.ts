@@ -55,6 +55,9 @@ export type ElectronAPI = {
   recordingStop: () => Promise<void>
   onRecordingProgress: (callback: (progress: RecordingProgress) => void) => () => void
 
+  // OBS
+  obsTestConnection: (config: { host: string; port: number; password?: string }) => Promise<{ success: boolean; version?: string; error?: string }>
+
   // Export
   exportStart: (request: ExportRequest) => Promise<{ success: boolean; outputPath?: string; error?: string }>
   exportCancel: () => Promise<void>
@@ -116,6 +119,9 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.removeListener(IPC_CHANNELS.RECORDING_PROGRESS, handler)
     }
   },
+
+  // OBS
+  obsTestConnection: (config) => ipcRenderer.invoke(IPC_CHANNELS.OBS_TEST_CONNECTION, config),
 
   // Export
   exportStart: (request) => ipcRenderer.invoke(IPC_CHANNELS.EXPORT_START, request),
