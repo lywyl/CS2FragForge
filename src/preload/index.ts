@@ -1,7 +1,8 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { IPC_CHANNELS } from '../shared/ipc'
 import type { ExportRequest, ExportProgress } from '../shared/export-types'
 import type { AppSettings } from '../shared/settings-types'
+import type { RecordingRequest, RecordingResult, RecordingProgress } from '../shared/recording-types'
 
 export type ElectronAPI = {
   // Python bridge
@@ -40,8 +41,19 @@ export type ElectronAPI = {
   openVideoDialog: () => Promise<string | null>
 
   // CS2 environment
-  cs2FindPath: () => Promise<string | null>
+  cs2FindPath: () => Promise<{
+    steamPath: string | null
+    cs2Path: string | null
+    cs2ExePath: string | null
+    replaysPath: string | null
+    steamUserId: string | null
+  } | null>
   cs2ValidatePath: (path: string) => Promise<boolean>
+
+  // Recording
+  recordingStart: (request: RecordingRequest) => Promise<RecordingResult>
+  recordingStop: () => Promise<void>
+  onRecordingProgress: (callback: (progress: RecordingProgress) => void) => () => void
 
   // Export
   exportStart: (request: ExportRequest) => Promise<{ success: boolean; outputPath?: string; error?: string }>
@@ -57,6 +69,9 @@ export type ElectronAPI = {
   settingsGet: () => Promise<AppSettings>
   settingsSet: (settings: Partial<AppSettings>) => Promise<AppSettings>
   settingsReset: () => Promise<AppSettings>
+
+  // File utilities
+  getDroppedFilePath: (file: File) => string
 
   // Window controls
   windowMinimize: () => void
@@ -91,6 +106,17 @@ const electronAPI: ElectronAPI = {
   cs2FindPath: () => ipcRenderer.invoke(IPC_CHANNELS.CS2_FIND_PATH),
   cs2ValidatePath: (path) => ipcRenderer.invoke(IPC_CHANNELS.CS2_VALIDATE_PATH, path),
 
+  // Recording
+  recordingStart: (request) => ipcRenderer.invoke(IPC_CHANNELS.RECORDING_START, request),
+  recordingStop: () => ipcRenderer.invoke(IPC_CHANNELS.RECORDING_STOP),
+  onRecordingProgress: (callback) => {
+    const handler = (_event: unknown, progress: RecordingProgress) => callback(progress)
+    ipcRenderer.on(IPC_CHANNELS.RECORDING_PROGRESS, handler)
+    return () => {
+      ipcRenderer.removeListener(IPC_CHANNELS.RECORDING_PROGRESS, handler)
+    }
+  },
+
   // Export
   exportStart: (request) => ipcRenderer.invoke(IPC_CHANNELS.EXPORT_START, request),
   exportCancel: () => ipcRenderer.invoke(IPC_CHANNELS.EXPORT_CANCEL),
@@ -117,6 +143,9 @@ const electronAPI: ElectronAPI = {
   settingsGet: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_GET),
   settingsSet: (settings) => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_SET, settings),
   settingsReset: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_RESET),
+
+  // File utilities
+  getDroppedFilePath: (file: File) => webUtils.getPathForFile(file),
 
   // Window controls
   windowMinimize: () => ipcRenderer.send(IPC_CHANNELS.WINDOW_MINIMIZE),

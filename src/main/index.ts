@@ -6,9 +6,11 @@ import { PythonBridge } from './python-bridge'
 import { CS2PathResolver } from './cs2-path-resolver'
 import { getFfmpegPath, getFfprobePath } from './ffmpeg'
 import { ExportService } from './export-service'
+import { RecordingOrchestrator } from './recording-orchestrator'
 import { getSettings, setSettings, resetSettings } from './settings-store'
 import { IPC_CHANNELS } from '../shared/ipc'
 import type { ExportRequest } from '../shared/export-types'
+import type { RecordingRequest } from '../shared/recording-types'
 import type { AppSettings } from '../shared/settings-types'
 
 const pythonBridge = new PythonBridge()
@@ -53,22 +55,34 @@ function createWindow(): void {
 
 async function callPythonAPI(
   endpoint: string,
-  body: Record<string, string>
+  body: Record<string, string>,
+  retries = 3
 ): Promise<unknown> {
   const port = pythonBridge.getPort()
   if (!port) {
     throw new Error('Python backend is not running')
   }
-  const response = await fetch(`http://127.0.0.1:${port}${endpoint}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  })
-  if (!response.ok) {
-    const errorText = await response.text()
-    throw new Error(`Python API error: ${response.status} ${errorText}`)
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      })
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`Python API error: ${response.status} ${errorText}`)
+      }
+      return response.json()
+    } catch (err) {
+      if (attempt < retries) {
+        await new Promise((r) => setTimeout(r, 1000))
+        continue
+      }
+      throw err
+    }
   }
-  return response.json()
 }
 
 function registerIpcHandlers(): void {
@@ -124,13 +138,30 @@ function registerIpcHandlers(): void {
     return CS2PathResolver.validateCS2Path(cs2Path)
   })
 
-  // Recording (stub for Phase 2.4)
-  ipcMain.handle(IPC_CHANNELS.RECORDING_START, async () => {
-    throw new Error('Not implemented yet - Phase 2')
+  // Recording handlers
+  let recordingOrchestrator: RecordingOrchestrator | null = null
+
+  ipcMain.handle(IPC_CHANNELS.RECORDING_START, async (event, request: RecordingRequest) => {
+    const webContents = event.sender
+
+    recordingOrchestrator = new RecordingOrchestrator((progress) => {
+      webContents.send(IPC_CHANNELS.RECORDING_PROGRESS, progress)
+    })
+
+    try {
+      const result = await recordingOrchestrator.record(request)
+      recordingOrchestrator = null
+      return result
+    } catch (err) {
+      recordingOrchestrator = null
+      const message = err instanceof Error ? err.message : 'Recording failed'
+      return { success: false, clips: [], error: message }
+    }
   })
 
   ipcMain.handle(IPC_CHANNELS.RECORDING_STOP, async () => {
-    throw new Error('Not implemented yet - Phase 2')
+    recordingOrchestrator?.cancel()
+    recordingOrchestrator = null
   })
 
   // Export handlers

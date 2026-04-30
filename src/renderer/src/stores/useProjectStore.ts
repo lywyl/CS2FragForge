@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { Project, Highlight, Clip, AudioTrack, GameInfo, ProjectStatus } from '../types/project'
 import type { ExportStatus, ExportProgress, ExportSettings } from '../../../shared/export-types'
 import { DEFAULT_EXPORT_SETTINGS } from '../../../shared/export-types'
+import type { RecordingStatus, RecordingProgress, RecordingResult } from '../../../shared/recording-types'
 
 interface ProjectState {
   project: Project | null
@@ -58,6 +59,15 @@ interface ProjectState {
   // Project persistence
   saveProject: () => Promise<string | null>
   loadProject: () => Promise<boolean>
+
+  // Recording
+  recordingStatus: RecordingStatus
+  recordingProgress: RecordingProgress | null
+  recordingResult: RecordingResult | null
+  setRecordingStatus: (status: RecordingStatus) => void
+  setRecordingProgress: (progress: RecordingProgress | null) => void
+  setRecordingResult: (result: RecordingResult | null) => void
+  resetRecording: () => void
 }
 
 type HighlightType = Highlight['type']
@@ -71,6 +81,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   exportStatus: 'idle',
   exportProgress: null,
   exportSettings: { ...DEFAULT_EXPORT_SETTINGS },
+  recordingStatus: 'idle',
+  recordingProgress: null,
+  recordingResult: null,
 
   setProject: (project) => set({ project, error: null }),
   clearProject: () =>
@@ -235,6 +248,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       exportSettings: { ...state.exportSettings, ...partial }
     })),
   resetExport: () => set({ exportStatus: 'idle', exportProgress: null }),
+
+  // Recording
+  setRecordingStatus: (recordingStatus) => set({ recordingStatus }),
+  setRecordingProgress: (recordingProgress) => set({ recordingProgress }),
+  setRecordingResult: (recordingResult) => set({ recordingResult }),
+  resetRecording: () => set({ recordingStatus: 'idle', recordingProgress: null, recordingResult: null }),
 
   // Project persistence
   saveProject: async () => {

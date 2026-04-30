@@ -111,11 +111,97 @@ class ParserService:
 
     def get_game_info(self) -> Dict[str, Any]:
         header = self.parse_header()
-        players = self.parse_player_info()
+
+        # Get total counted rounds from round_end events
+        try:
+            events = self.parser.parse_events(
+                ["round_end"],
+                other=["total_rounds_played"],
+            )
+            events_dict = dict(events)
+            round_end_df = events_dict.get("round_end")
+            if round_end_df is not None and len(round_end_df) > 0:
+                total_counted_rounds = int(round_end_df["total_rounds_played"].max())
+            else:
+                total_counted_rounds = 0
+        except Exception:
+            total_counted_rounds = 0
+
+        # Get player kills/deaths from player_death events
+        try:
+            death_events = self.parser.parse_events(
+                ["player_death"],
+                player=["name", "steamid", "team_name"],
+            )
+            death_dict = dict(death_events)
+            death_df = death_dict.get("player_death")
+        except Exception:
+            death_df = None
+
+        # Build player stats from player_death events
+        player_stats: Dict[str, Dict[str, Any]] = {}
+
+        if death_df is not None and len(death_df) > 0:
+            # Columns: attacker_name, attacker_steamid, attacker_team_name,
+            #           user_name, user_steamid, user_team_name
+            for _, row in death_df.iterrows():
+                # Attacker gets a kill
+                attacker_name = row.get("attacker_name")
+                attacker_sid = row.get("attacker_steamid")
+                attacker_team = row.get("attacker_team_name")
+                if attacker_name and attacker_sid:
+                    key = str(attacker_sid)
+                    if key not in player_stats:
+                        player_stats[key] = {
+                            "name": attacker_name,
+                            "steamid": int(attacker_sid),
+                            "team": attacker_team or "",
+                            "kills": 0,
+                            "deaths": 0,
+                        }
+                    player_stats[key]["kills"] += 1
+                    if attacker_team and not player_stats[key]["team"]:
+                        player_stats[key]["team"] = attacker_team
+
+                # Victim gets a death
+                user_name = row.get("user_name")
+                user_sid = row.get("user_steamid")
+                user_team = row.get("user_team_name")
+                if user_name and user_sid:
+                    key = str(user_sid)
+                    if key not in player_stats:
+                        player_stats[key] = {
+                            "name": user_name,
+                            "steamid": int(user_sid),
+                            "team": user_team or "",
+                            "kills": 0,
+                            "deaths": 0,
+                        }
+                    player_stats[key]["deaths"] += 1
+                    if user_team and not player_stats[key]["team"]:
+                        player_stats[key]["team"] = user_team
+
+        # Fill in any players from parse_player_info that weren't in death events
+        raw_players = self.parse_player_info()
+        for p in raw_players:
+            sid = p.get("steamid")
+            if sid is None:
+                continue
+            key = str(sid)
+            if key not in player_stats:
+                player_stats[key] = {
+                    "name": p.get("name", "Unknown"),
+                    "steamid": int(sid),
+                    "team": "",
+                    "kills": 0,
+                    "deaths": 0,
+                }
+
+        players = list(player_stats.values())
+
         return {
             "map_name": header.get("map_name", "unknown"),
-            "server_name": header.get("server_name", ""),
-            "demo_version": header.get("demo_version_name", ""),
             "tick_rate": self.get_tick_rate(),
+            "total_counted_rounds": total_counted_rounds,
             "players": players,
         }

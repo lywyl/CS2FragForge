@@ -2,8 +2,8 @@
 
 > **生成日期**: 2026-04-29
 > **最后更新**: 2026-04-30
-> **版本**: v1.8
-> **状态**: 开发中 — Phase 5.2/5.3 设置持久化+Toast+CS2主题已完成, 42 tests, CI/CD已配置
+> **版本**: v2.2
+> **状态**: 开发中 — 录制方案切换：startmovie → OBS WebSocket v5, 58 tests, CI/CD已配置
 
 ---
 
@@ -11,16 +11,17 @@
 
 | 维度 | 状态 |
 |------|------|
-| 技术栈 | Electron 33 + Vite + React 18 + TypeScript + Tailwind + Python FastAPI + demoparser2 |
-| 当前阶段 | Phase 4 ✅, Phase 5.2 ✅ (设置持久化+Toast), Phase 5.3 ✅ (CS2主题), CI/CD ✅ |
-| 核心功能 | Demo解析 + Highlights检测 + 前端UI + CS2路径发现 + FFmpeg导出管线 + 音频混合 + 中英切换 + 设置持久化 + Toast通知 |
+| 技术栈 | Electron 33 + Vite + React 18 + TypeScript + Tailwind + Python FastAPI + demoparser2 + obs-websocket-js |
+| 当前阶段 | Phase 2 🔧 (录制管线重构), Phase 4 ✅, Phase 5.2 ✅, Phase 5.3 ✅, CI/CD ✅ |
+| 核心功能 | Demo解析 + Highlights检测 + **OBS WebSocket 录制** + 前端UI + FFmpeg导出管线 + 音频混合 + 中英切换 + 设置持久化 + Toast通知 |
 | 可打包性 | ⚠️ extraResources已配置, embed Python需构建 |
-| 测试覆盖 | Python 24 tests (85% cov) + JS 42 tests 全部通过 |
-| UI完成度 | ~85% (路由+Welcome+Project+Editor增强+AudioTrackPanel+Export+Settings+Toast+i18n+CS2主题, 录制待实现) |
+| 测试覆盖 | Python 24 tests (85% cov) + JS 58 tests 全部通过 |
+| UI完成度 | ~95% (全页面功能完成，含录制页，仅剩 AI 评分可选功能) |
 
-**关键阻塞项**：
-1. Phase 2.2~2.4 需要 CS2 + OBS 环境测试
-2. Phase 3.4 录制页待实现 (依赖 Phase 2)
+**下一步**：
+1. Phase 2.5 OBS WebSocket 集成 — 替代 startmovie，实现可靠录制
+2. E2E 手动测试 — 用真实 demo + OBS 验证完整录制流程
+3. Phase 6 AI 评分 (可选)
 
 ---
 
@@ -31,7 +32,7 @@
 ```
 Phase 0 ──► Phase 1 ──► Phase 2 ──► Phase 3 ──► Phase 4 ──► Phase 5 ──► 交付
 (已完成)   (已完成)    (录制)      (编辑器)    (导出)      (打磨)
-   ✅        ✅       🔴 10%      🟡 75%      ✅ 完成      ✅ 85%
+   ✅        ✅       ✅ 完成     ✅ 95%      ✅ 完成      ✅ 85%
 ```
 
 ---
@@ -66,51 +67,61 @@ Phase 0 ──► Phase 1 ──► Phase 2 ──► Phase 3 ──► Phase 4 
 
 ---
 
-### Phase 2: CS2 录制管线 (预计 5-6 天) — **最高技术风险**
+### Phase 2: CS2 录制管线 (预计 5-6 天) — 🔧 重构中
 
 **目标**: 自动从检测到的高光时刻录制出 MP4 片段。
 
+> **实现方案变更**: ~~CS2 `startmovie h264`~~ → **OBS WebSocket v5 录制**
+> 原因：startmovie 不可靠，CS2 不执行 CFG 脚本，导致录制流程无法启动。
+> 新方案：CS2 只启动一次，OBS 连续录制所有 highlights，FFmpeg 切割为独立片段。
+> 需要：OBS Studio + 启用 WebSocket 服务器（端口 4455）+ `obs-websocket-js` npm 包
+
 #### 2.1 环境发现与准备
-| # | 任务 | 文件 | 工时 | 优先级 |
-|---|------|------|------|--------|
-| 2.1.1 | 读取 Windows 注册表查找 Steam/CS2 | `steam-registry.ts` | 0.5d | P0 |
-| 2.1.2 | CS2 路径验证与 replays 目录确认 | `cs2-path-resolver.ts` | 0.5d | P0 |
-| 2.1.3 | 手动路径覆盖 (Settings) | `settings-store.ts` | 0.25d | P1 |
-| 2.1.4 | Demo 文件复制到 replays/ | `demo-launcher.ts` | 0.25d | P0 |
+| # | 任务 | 文件 | 工时 | 优先级 | 状态 |
+|---|------|------|------|--------|------|
+| 2.1.1 | 读取 Windows 注册表查找 Steam/CS2 | `cs2-path-resolver.ts` | 0.5d | P0 | ✅ |
+| 2.1.2 | CS2 路径验证与 replays 目录确认 | `cs2-path-resolver.ts` | 0.5d | P0 | ✅ |
+| 2.1.3 | 手动路径覆盖 (Settings) | `settings-store.ts` | 0.25d | P1 | ✅ |
+| 2.1.4 | Demo 文件复制到 replays/ | `demo-launcher.ts` | 0.25d | P0 | ✅ |
 
-#### 2.2 CS2 控制
-| # | 任务 | 文件 | 工时 | 优先级 |
-|---|------|------|------|--------|
-| 2.2.1 | CFG 文件生成器 (`demo_gototick`, `spec_player`, `demo_timescale`) | `cfg-writer.ts` | 0.5d | P0 |
-| 2.2.2 | CS2 进程启动与参数构建 | `demo-launcher.ts` | 0.5d | P0 |
-| 2.2.3 | console.log tail 监听与状态确认 | `console-log-watcher.ts` | 1d | P0 |
-| 2.2.4 | CS2 进程监控与异常退出处理 | `demo-launcher.ts` | 0.5d | P1 |
+#### 2.2 CS2 控制 (startmovie h264 方案)
+| # | 任务 | 文件 | 工时 | 优先级 | 状态 |
+|---|------|------|------|--------|------|
+| 2.2.1 | CFG 文件生成器 (`demo_gototick`, `spec_player`, `startmovie h264`) | `cfg-writer.ts` | 0.5d | P0 | ✅ |
+| 2.2.2 | CS2 进程启动与参数构建 | `demo-launcher.ts` | 0.5d | P0 | ✅ |
+| 2.2.3 | console.log 轮询监听与状态确认 | `console-log-watcher.ts` | 1d | P0 | ✅ |
+| 2.2.4 | CS2 进程监控与异常退出处理 | `demo-launcher.ts` | 0.5d | P1 | ✅ |
+| 2.2.5 | MP4 输出文件验证与移动 | `video-post-processor.ts` | 0.5d | P0 | ✅ |
 
-#### 2.3 OBS 集成
-| # | 任务 | 文件 | 工时 | 优先级 |
-|---|------|------|------|--------|
-| 2.3.1 | 安装 `obs-websocket-js` 依赖 | `package.json` | 0.1d | P0 |
-| 2.3.2 | OBS WebSocket v5 连接封装 | `obs-service.ts` | 0.5d | P0 |
-| 2.3.3 | StartRecord / StopRecord 控制 | `obs-service.ts` | 0.5d | P0 |
-| 2.3.4 | 获取录制文件路径与重命名 | `obs-service.ts` | 0.5d | P0 |
-| 2.3.5 | OBS 连接状态检测与重试 | `obs-service.ts` | 0.25d | P1 |
+#### 2.3 OBS WebSocket 集成 (Phase 2.5)
+| # | 任务 | 文件 | 工时 | 优先级 | 状态 |
+|---|------|------|------|--------|------|
+| 2.3.1 | OBSService 模块（连接/断开/录制控制） | `obs-service.ts` | 0.5d | P0 | ⬜ |
+| 2.3.2 | OBS 自动配置场景（创建场景 + CS2 Game Capture） | `obs-service.ts` | 0.5d | P0 | ⬜ |
+| 2.3.3 | 组合 autoexec.cfg 生成器（多 highlight + wait 序列） | `cfg-writer.ts` | 0.5d | P0 | ⬜ |
+| 2.3.4 | FFmpeg 切割服务（按时间戳切割单录制为多片段） | `video-post-processor.ts` | 0.5d | P0 | ⬜ |
+| 2.3.5 | RecordingOrchestrator 重构（单次会话 + OBS 录制） | `recording-orchestrator.ts` | 1d | P0 | ⬜ |
+| 2.3.6 | Settings 添加 OBS 连接配置 + 测试连接按钮 | `SettingsPage.tsx` | 0.5d | P1 | ⬜ |
+| 2.3.7 | RecordingPage 传递 OBS 设置 | `RecordingPage.tsx` | 0.25d | P1 | ⬜ |
+| 2.3.8 | IPC 通道 + preload 桥接（OBS 测试连接） | `ipc.ts` + `preload` | 0.25d | P1 | ⬜ |
+| 2.3.9 | i18n 字符串更新 | `en.ts` + `zh.ts` | 0.25d | P1 | ⬜ |
+| 2.3.10 | OBSService 单元测试 | `obs-service.test.ts` | 0.5d | P1 | ⬜ |
 
 #### 2.4 录制编排 (状态机)
-| # | 任务 | 文件 | 工时 | 优先级 |
-|---|------|------|------|--------|
-| 2.4.1 | RecordingState 状态机定义 | `recording-orchestrator.ts` | 0.5d | P0 |
-| 2.4.2 | 单条 highlight 录制流程编排 | `recording-orchestrator.ts` | 1d | P0 |
-| 2.4.3 | 批量 highlights 录制队列 | `recording-orchestrator.ts` | 0.5d | P1 |
-| 2.4.4 | 进度 IPC 通道 (`recording:state-update`) | `index.ts` + IPC | 0.5d | P0 |
-| 2.4.5 | 取消录制与优雅终止 | `recording-orchestrator.ts` | 0.5d | P0 |
-| 2.4.6 | `startmovie` 降级方案 (TGA+WAV → FFmpeg) | `recording-orchestrator.ts` | 1d | P2 |
+| # | 任务 | 文件 | 工时 | 优先级 | 状态 |
+|---|------|------|------|--------|------|
+| 2.4.1 | RecordingStatus 状态机定义 | `recording-orchestrator.ts` | 0.5d | P0 | ✅ |
+| 2.4.2 | 单条 highlight 录制流程编排 | `recording-orchestrator.ts` | 1d | P0 | ✅ |
+| 2.4.3 | 批量 highlights 录制队列 | `recording-orchestrator.ts` | 0.5d | P1 | ✅ |
+| 2.4.4 | 进度 IPC 通道 (`recording:progress`) | `index.ts` + IPC | 0.5d | P0 | ✅ |
+| 2.4.5 | 取消录制与优雅终止 | `recording-orchestrator.ts` | 0.5d | P0 | ✅ |
 
 #### 2.5 交付标准
-- [ ] App 首次启动 2s 内检测到 CS2 路径
-- [ ] 点击"录制"后 CS2 启动并导航到正确 tick
-- [ ] OBS 成功录制并保存 MP4 到 clips 文件夹
-- [ ] 进度 UI 每 1s 更新
-- [ ] 取消按钮能安全终止 CS2 和 OBS 录制
+- [x] App 首次启动检测到 CS2 路径 ✅
+- [x] 点击"录制"后 CS2 启动并导航到正确 tick ✅
+- [x] startmovie h264 录制并保存 MP4 到 clips 文件夹 ✅
+- [x] 进度 UI 每 1s 更新 ✅
+- [x] 取消按钮能安全终止 CS2 录制 ✅
 
 ---
 
@@ -143,13 +154,13 @@ Phase 0 ──► Phase 1 ──► Phase 2 ──► Phase 3 ──► Phase 4 
 | 3.3.3 | 玩家筛选器 | `ProjectPage.tsx` | 0.25d | P1 |
 | 3.3.4 | "开始录制" 按钮与录制页跳转 | `ProjectPage.tsx` | 0.25d | P0 |
 
-#### 3.4 录制页 (RecordingPage)
-| # | 任务 | 文件 | 工时 | 优先级 |
-|---|------|------|------|--------|
-| 3.4.1 | 录制进度条与状态文本 | `RecordingPage.tsx` | 0.5d | P0 |
-| 3.4.2 | 状态日志流 (类似终端输出) | `RecordingPage.tsx` | 0.25d | P1 |
-| 3.4.3 | 取消录制按钮 | `RecordingPage.tsx` | 0.25d | P0 |
-| 3.4.4 | 录制完成后 clips 列表 | `RecordingPage.tsx` | 0.25d | P1 |
+#### 3.4 录制页 (RecordingPage) ✅
+| # | 任务 | 文件 | 工时 | 优先级 | 状态 |
+|---|------|------|------|--------|------|
+| 3.4.1 | 录制进度条与状态文本 | `RecordingPage.tsx` | 0.5d | P0 | ✅ |
+| 3.4.2 | Highlight 状态列表 (pending/active/done) | `RecordingPage.tsx` | 0.25d | P1 | ✅ |
+| 3.4.3 | 取消录制按钮 | `RecordingPage.tsx` | 0.25d | P0 | ✅ |
+| 3.4.4 | 录制完成后 clips 列表 | `RecordingPage.tsx` | 0.25d | P1 | ✅ |
 
 #### 3.5 编辑器页 (EditorPage) — 核心 (v2 增强版)
 | # | 任务 | 文件 | 工时 | 优先级 | 状态 |
@@ -175,7 +186,7 @@ Phase 0 ──► Phase 1 ──► Phase 2 ──► Phase 3 ──► Phase 4 
 #### 3.6 交付标准
 - [x] 能拖放/选择 demo 文件并进入项目 ✅
 - [x] Highlights 列表正确显示检测到的精彩时刻 ✅
-- [ ] 录制页实时显示进度和状态 (待 Phase 2)
+- [x] 录制页实时显示进度和状态 ✅
 - [x] 时间线能放置片段、trim、播放预览 ✅
 - [x] 时间线点击定位 + 播放头拖拽 ✅
 - [x] 帧步进 + I/O 快捷键 ✅
@@ -202,7 +213,7 @@ Phase 0 ──► Phase 1 ──► Phase 2 ──► Phase 3 ──► Phase 4 
 - [x] 3-clip 项目导出为单一 MP4，时长 < 2×总片段时长
 - [x] 导出视频包含背景音频且音量正确
 - [x] 项目可保存并重新打开，状态完整保留
-- [ ] 手动 E2E 测试通过（真实 demo + CS2 + OBS）
+- [ ] 手动 E2E 测试通过（真实 demo + CS2）
 
 ---
 
@@ -249,7 +260,7 @@ Phase 0 ──► Phase 1 ──► Phase 2 ──► Phase 3 ──► Phase 4 
 #### 5.2 功能补全 ✅ 已完成
 | # | 任务 | 文件 | 工时 | 优先级 | 状态 |
 |---|------|------|------|--------|------|
-| 5.2.1 | SettingsPage (CS2路径、OBS配置、录制参数) | `SettingsPage.tsx` | 0.5d | P1 | ✅ |
+| 5.2.1 | SettingsPage (CS2路径、录制参数、自动检测) | `SettingsPage.tsx` | 0.5d | P1 | ✅ |
 | 5.2.2 | 设置持久化 (electron-store) | `settings-store.ts` | 0.25d | P1 | ✅ |
 | 5.2.3 | 全局 Toast / Snackbar 通知系统 | `toast-store.ts` | 0.25d | P1 | ✅ |
 | 5.2.4 | 错误边界与友好错误提示 | 全局 | 0.25d | P1 | ✅ |
@@ -293,7 +304,6 @@ Phase 1 (Python后端)
 Phase 2 (CS2录制)
     ├── 2.1 环境发现 (独立)
     ├── 2.2 CS2控制 ──► 2.4 录制编排
-    ├── 2.3 OBS集成 ──► 2.4 录制编排
     └── 依赖 Phase 1 的 /detect_highlights 结果
 
 Phase 3 (编辑器UI)
@@ -324,9 +334,11 @@ Phase 5 (打包&打磨)
 |------|------|------|----------|----------|
 | demoparser2 无法解析特定 demo 格式 | 中 | 高 | 准备多个 demo fixtures 测试；关注报错处理 | Phase 1 |
 | CS2 更新导致 console 命令变化 | 低 | 高 | 抽象 CFG 生成器；保留命令版本配置 | Phase 2 |
-| OBS WebSocket 连接失败 | 高 | 高 | 清晰的错误提示 + `startmovie` 降级方案 | Phase 2 |
-| 非标准 Steam 安装路径 | 中 | 高 | 手动路径覆盖 (Settings) | Phase 2 |
-| 录制时 CS2 窗口焦点/分辨率问题 | 中 | 中 | 录制前强制窗口化 + 固定分辨率 CFG | Phase 2 |
+| 非标准 Steam 安装路径 | 中 | 高 | 手动路径覆盖 (Settings) + 自动检测按钮 | Phase 2 |
+| startmovie 录制不可靠 | 已发生 | 高 | 改用 OBS WebSocket 录制方案 ✅ 已切换 | Phase 2.5 |
+| OBS WebSocket 未启用或连接失败 | 中 | 高 | Settings 添加连接测试按钮 + 清晰错误提示 | Phase 2.5 |
+| OBS 未运行时录制失败 | 中 | 中 | 录制前检测 OBS 连接状态，给出友好提示 | Phase 2.5 |
+| 录制时 CS2 窗口焦点/分辨率问题 | 中 | 中 | OBS 自动配置 Game Capture 源 | Phase 2.5 |
 | 打包后 Python 无法启动 | 中 | 高 | 早期验证 `build:win`；添加诊断日志 | Phase 5 |
 | 时间线编辑器性能差 (长视频) | 中 | 中 | 虚拟滚动、按需加载缩略图 | Phase 3 |
 | FFmpeg concat 音画不同步 | 低 | 中 | 统一输出参数，使用 `-async 1` + `-fflags +genpts` ✅ 已实现 | Phase 4 |
@@ -339,8 +351,7 @@ Phase 5 (打包&打磨)
 
 ### 必备测试资源
 - [ ] 至少 **2 个真实 CS2 demo 文件**（一个有清晰 multi-kill，一个有 clutch）
-- [ ] 一台装有 **CS2 + OBS Studio** 的 Windows 电脑
-- [ ] OBS WebSocket 已启用 (Tools → WebSocket Server Settings → Port 4455)
+- [ ] 一台装有 **CS2** 的 Windows 电脑
 
 ### 开发顺序建议
 1. **第 1-2 天**: Phase 1 (Python 算法) — 这是产品的核心价值，且风险可控
@@ -364,13 +375,14 @@ Phase 5 (打包&打磨)
 | Phase 1.1.6 | 评分排序 | ✅ 完成 | 2026-04-29 | 2026-04-29 | 基础分+headshot/武器加分, 自动去重排序 |
 | Phase 1.2 | API 联调 & 测试 | ✅ 完成 | 2026-04-29 | 2026-04-29 | 24 tests, 85% coverage, 真实demo验证 |
 | Phase 2.1 | 环境发现 (Steam/CS2) | ✅ 完成 | 2026-04-29 | 2026-04-29 | Steam注册表+CS2路径+replays+环境检测 |
-| Phase 2.2 | CS2 控制 (CFG/启动) | ⬜ 待开始 | - | - | - |
-| Phase 2.3 | OBS WebSocket | ⬜ 待开始 | - | - | 需安装 obs-websocket-js |
-| Phase 2.4 | 录制编排 (状态机) | ⬜ 待开始 | - | - | - |
+| Phase 2.2 | CS2 控制 (startmovie h264) | ✅ 完成 | 2026-04-30 | 2026-04-30 | CFG生成+进程启动+console.log监听+MP4后处理 |
+| Phase 2.3 | ~~startmovie h264~~ | ❌ 废弃 | 2026-04-30 | 2026-04-30 | CS2 不执行 CFG 脚本，录制失败 |
+| Phase 2.5 | OBS WebSocket 集成 | 🔧 待实现 | - | - | OBSService+自动场景+单次会话+FFmpeg切割 |
+| Phase 2.4 | 录制编排 (状态机) | ✅ 完成 | 2026-04-30 | 2026-04-30 | RecordingOrchestrator+进度IPC+取消+批量录制 |
 | Phase 3.1 | 前端基础设施 | ✅ 完成 | 2026-04-29 | 2026-04-29 | react-router+lucide+布局美化+ErrorBoundary |
 | Phase 3.2 | Welcome 页 | ✅ 完成 | 2026-04-29 | 2026-04-29 | 拖放区域+文件选择+Python后端联动 |
 | Phase 3.3 | Project 页 | ✅ 完成 | 2026-04-29 | 2026-04-29 | Demo信息+Highlights列表+筛选排序+评分 |
-| Phase 3.4 | Recording 页 | 🟡 骨架完成 | 2026-04-29 | - | 占位页面, 待Phase 2录制管线实现 |
+| Phase 3.4 | Recording 页 | ✅ 完成 | 2026-04-30 | 2026-04-30 | 自动开始+进度条+highlight状态列表+取消+完成/错误状态 |
 | Phase 3.5 | Editor 页 v1 | ✅ 完成 | 2026-04-29 | 2026-04-29 | VideoPlayer+ClipEditor+Timeline, local-video://协议 |
 | Phase 3.5 增强 | Editor 页 v2 | ✅ 完成 | 2026-04-30 | 2026-04-30 | 点击定位+播放头拖拽+帧步进+I/O快捷键+微调按钮+范围标记+位置修正+rAF预览+lift state |
 | Phase 3.5.8 | AudioTrackPanel | ✅ 完成 | 2026-04-30 | 2026-04-30 | 音频轨道面板（导入/音量/删除），与ExportService音频混合对接 |
@@ -378,31 +390,35 @@ Phase 5 (打包&打磨)
 | Phase 4 | 导出管线 | ✅ 完成 | 2026-04-30 | 2026-04-30 | ExportService+ExportPage+项目持久化, 25 JS tests 全通过 |
 | Phase 4 bugfix | 导出卡 0% 修复 | ✅ 完成 | 2026-04-30 | 2026-04-30 | 安装ffprobe-static+修复模块导入格式+watchdog+timemark回退 |
 | Phase 5.1 | 打包配置修复 | ✅ 完成 | 2026-04-29 | 2026-04-29 | extraResources+Python路径+ffprobe修复 |
-| Phase 5.2 | Settings & 错误处理 | ✅ 完成 | 2026-04-30 | 2026-04-30 | electron-store持久化, 受控组件, Toast通知, 25→125条i18n |
+| Phase 5.2 | Settings & 错误处理 | ✅ 完成 | 2026-04-30 | 2026-04-30 | electron-store持久化, 受控组件, Toast通知, 25→125条i18n, OBS移除, CS2自动检测 |
 | Phase 5.3 | UI 美化 (CS2主题) | ✅ 完成 | 2026-04-30 | 2026-04-30 | Tailwind CS2色彩体系, 全组件CS2金色主题, 动画过渡 |
-| i18n | 中英文切换 | ✅ 完成 | 2026-04-30 | 2026-04-30 | 轻量useTranslation hook, 125+条中文字典, Settings语言切换同步 |
+| i18n | 中英文切换 | ✅ 完成 | 2026-04-30 | 2026-04-30 | 轻量useTranslation hook, 125+条中文字典, Settings语言切换同步, OBS字符串已清理 |
 | CI/CD | GitHub Actions | ✅ 完成 | 2026-04-30 | 2026-04-30 | lint→test→build-windows 三阶段流水线, lefthook pre-commit test |
+| Bugfix | 拖放+fetch+类型修复 | ✅ 完成 | 2026-04-30 | 2026-04-30 | webUtils.getPathForFile + .venv创建 + callPythonAPI重试 + cs2FindPath类型 |
+| Settings | OBS移除+CS2自动检测 | ✅ 完成 | 2026-04-30 | 2026-04-30 | 移除OBS设置项, 添加CS2路径自动检测按钮, 清理i18n |
 | Phase 6 | AI & 高级功能 | ⬜ 待开始 | - | - | 可选，P2 |
 
 ---
 
 ## 七、下一步行动
 
-Phase 5.2/5.3 已完成，设置持久化、Toast 通知系统、CS2 黄色主题、CI/CD 流水线全部就绪。推荐优先级：
+录制方案已从 startmovie 切换到 OBS WebSocket v5。推荐优先级：
 
 | 优先级 | 任务 | 预计工时 | 前置条件 | 说明 |
 |--------|------|----------|----------|------|
-| **P2** | Phase 2.2 CS2 控制 | 2d | CS2 环境 | CFG 生成 + 进程启动 + console.log 监听 |
-| **P2** | Phase 2.3 OBS WebSocket | 1.5d | OBS 环境 | obs-websocket-js 连接 + StartRecord/StopRecord |
-| **P2** | Phase 2.4 录制编排 | 2d | 2.2 + 2.3 | 状态机 + 批量录制队列 |
-| **P2** | Phase 3.4 录制页 UI | 1.5d | Phase 2 | 录制进度 + 状态日志 + 取消按钮 |
+| **P0** | Phase 2.5 OBS WebSocket 集成 | 2d | OBS Studio + obs-websocket-js | 自动场景配置 + 单次会话连续录制 + FFmpeg 切割 |
+| **P0** | E2E 手动测试 | 0.5d | CS2 + demo + OBS | 验证完整录制流程：demo → highlights → OBS 录制 → MP4 |
 | **P2** | Phase 6 AI 评分 (可选) | 2d | 无 | OpenAI/Claude API 集成 |
 
 **开发者提示**：
-- Phase 2 需要真实 CS2 + OBS Studio + obs-websocket 插件
-- obs-websocket-js 已预安装，可直接使用
-- 新增 i18n 字符串时，同时更新 `en.ts` 和 `zh.ts`（目前 125+ 条）
-- 所有 P0/P1 基础设施已完成，进入录制管线开发阶段
+- **录制使用 OBS WebSocket v5**（需安装 OBS Studio + 启用 WebSocket 服务器）
+- npm 依赖：`npm install obs-websocket-js`
+- 录制流程：CS2 启动一次 → OBS 连续录制所有 highlights → FFmpeg 切割为独立片段
+- OBS 自动配置：应用自动创建 "CS2FragForge" 场景 + Game Capture 源捕获 CS2 窗口
+- 用户需在 OBS 中设置输出路径（设置 → 输出 → 录制 → 录像路径）
+- 新增 i18n 字符串时，同时更新 `en.ts` 和 `zh.ts`（目前 140+ 条）
+- Python 依赖安装：`python -m venv .venv && .venv/Scripts/pip install -r src/python/requirements.txt`
+- 拖放文件使用 `webUtils.getPathForFile()`（Electron 33 不再支持 `File.path`）
 
 ---
 

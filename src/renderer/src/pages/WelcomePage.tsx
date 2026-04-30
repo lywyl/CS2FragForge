@@ -125,7 +125,7 @@ export const WelcomePage: React.FC = () => {
       const files = e.dataTransfer.files
       if (files.length > 0) {
         const file = files[0]
-        const filePath = (file as unknown as { path: string }).path
+        const filePath = window.electronAPI.getDroppedFilePath(file)
         if (filePath) {
           handleFile(filePath)
         }

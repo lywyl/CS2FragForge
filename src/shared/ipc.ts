@@ -26,7 +26,7 @@ export const IPC_CHANNELS = {
   // Recording
   RECORDING_START: 'recording:start',
   RECORDING_STOP: 'recording:stop',
-  RECORDING_STATE: 'recording:state',
+  RECORDING_PROGRESS: 'recording:progress',
 
   // Export
   EXPORT_START: 'export:start',

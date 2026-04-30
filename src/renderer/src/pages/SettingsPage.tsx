@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Settings, Cpu, Monitor, Wifi, Globe, RotateCcw, Loader2, AlertCircle } from 'lucide-react'
+import { Settings, Cpu, Monitor, Globe, RotateCcw, Loader2, AlertCircle, Search } from 'lucide-react'
 import { useTranslation } from '../i18n'
 import { useSettingsStore } from '../stores/useSettingsStore'
 import { toast } from '../stores/useToastStore'
@@ -14,6 +14,7 @@ export const SettingsPage: React.FC = () => {
   const updateSetting = useSettingsStore((s) => s.updateSetting)
   const resetSettings = useSettingsStore((s) => s.resetSettings)
 
+  const [isDetecting, setIsDetecting] = useState(false)
   const [showResetConfirm, setShowResetConfirm] = useState(false)
 
   useEffect(() => {
@@ -43,6 +44,26 @@ export const SettingsPage: React.FC = () => {
       if (!err) {
         toast.success(t('settings.saved'))
       }
+    }
+  }
+
+  const handleAutoDetect = async () => {
+    setIsDetecting(true)
+    try {
+      const envInfo = await window.electronAPI.cs2FindPath()
+      if (envInfo?.cs2Path) {
+        await updateSetting('cs2InstallPath', envInfo.cs2Path)
+        const err = useSettingsStore.getState().error
+        if (!err) {
+          toast.success(t('settings.detected'))
+        }
+      } else {
+        toast.error(t('settings.notDetected'))
+      }
+    } catch {
+      toast.error(t('settings.notDetected'))
+    } finally {
+      setIsDetecting(false)
     }
   }
 
@@ -123,52 +144,23 @@ export const SettingsPage: React.FC = () => {
               placeholder={t('settings.cs2Placeholder')}
             />
             <button
+              onClick={handleAutoDetect}
+              disabled={isDetecting}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm bg-cs2-elevated hover:bg-cs2-border border border-cs2-border rounded text-cs2-text transition-colors disabled:opacity-50"
+            >
+              {isDetecting ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Search className="w-4 h-4" />
+              )}
+              {t('settings.autoDetect')}
+            </button>
+            <button
               onClick={handleBrowse}
               className="px-4 py-2 text-sm bg-cs2-elevated hover:bg-cs2-border border border-cs2-border rounded text-cs2-text transition-colors"
             >
               {t('settings.browse')}
             </button>
-          </div>
-        </section>
-
-        {/* OBS WebSocket */}
-        <section className="bg-cs2-surface rounded-lg p-4 border border-cs2-border">
-          <div className="flex items-center gap-2 mb-3">
-            <Wifi className="w-5 h-5 text-cs2-gold" />
-            <h3 className="text-lg font-medium text-cs2-text">{t('settings.obsWebSocket')}</h3>
-          </div>
-          <p className="text-sm text-cs2-text-muted mb-3">
-            {t('settings.obsDescription')}
-          </p>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs text-cs2-text-muted mb-1">{t('settings.host')}</label>
-              <input
-                type="text"
-                value={settings.obsHost}
-                onChange={(e) => handleChange('obsHost', e.target.value)}
-                className="w-full bg-cs2-elevated border border-cs2-border rounded px-3 py-2 text-sm text-cs2-text focus:outline-none focus:border-cs2-gold transition-colors"
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-cs2-text-muted mb-1">{t('settings.port')}</label>
-              <input
-                type="number"
-                value={settings.obsPort}
-                onChange={(e) => handleChange('obsPort', Number(e.target.value))}
-                className="w-full bg-cs2-elevated border border-cs2-border rounded px-3 py-2 text-sm text-cs2-text focus:outline-none focus:border-cs2-gold transition-colors"
-              />
-            </div>
-          </div>
-          <div className="mt-3">
-            <label className="block text-xs text-cs2-text-muted mb-1">{t('settings.password')}</label>
-            <input
-              type="password"
-              value={settings.obsPassword}
-              onChange={(e) => handleChange('obsPassword', e.target.value)}
-              className="w-full bg-cs2-elevated border border-cs2-border rounded px-3 py-2 text-sm text-cs2-text focus:outline-none focus:border-cs2-gold transition-colors"
-              placeholder={t('settings.passwordPlaceholder')}
-            />
           </div>
         </section>
 

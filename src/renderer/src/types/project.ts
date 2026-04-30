@@ -12,6 +12,7 @@ export interface Highlight {
   weapons: string[]
   score: number
   headshotCount?: number
+  selected?: boolean
 }
 
 export interface Clip {

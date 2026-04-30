@@ -11,9 +11,9 @@
 
 Build a desktop application that automatically identifies highlight moments from CS2 `.dem` files and produces edited video clips. The app uses a **Python backend** (`demoparser2`) for demo analysis and rule-based highlight detection, controls **CS2 client** for demo playback, records via **OBS WebSocket** API, and provides a **medium-complexity timeline editor** for clip trimming, arrangement, audio overlay, and export.
 
-**Recording Strategy (Primary)**: OBS WebSocket  
-**Recording Strategy (Fallback)**: CS2 `startmovie` (TGA frames + WAV → FFmpeg compose)  
-**CS2 Control Method**: Auto-generated `.cfg` files + `-condebug` log monitoring  
+**Recording Strategy (Primary)**: OBS WebSocket v5 (`obs-websocket-js`)
+**Recording Strategy (Fallback)**: ~~CS2 `startmovie`~~ (已废弃，不可靠)
+**CS2 Control Method**: Auto-generated `.cfg` files + `console.log` polling
 **Python ↔ Electron**: Local HTTP server (FastAPI) on `localhost:8765`  
 
 ---
@@ -89,7 +89,7 @@ App (Electron BrowserWindow)
 │   │   └── AudioTrackPanel (imported audio files, volume, mute)
 │   ├── SettingsPage
 │   │   ├── CS2PathSetting (auto-detected + manual override)
-│   │   ├── OBSConnectionSetting (host, port, password)
+│   │   ├── OBSConnectionSetting (host, port, password + test button)
 │   │   ├── RecordingSettings (pre/post padding, tick rate default)
 │   │   └── AISettings (API key, model selection, enable/disable)
 │   └── ExportPage (render queue, progress bars, output folder)
@@ -193,28 +193,17 @@ This is the most complex and risky subsystem. It is broken into 6 stages:
 3. The `-condebug` flag writes all console output to `<cs2_dir>/game/csgo/console.log`
 4. Monitor `console.log` for keywords (`Demo playback started`, `Reached tick`) to confirm navigation
 
-#### Stage D: OBS WebSocket Recording Control
-1. **Connect**: Use `obs-websocket-js` (v5) to connect to `ws://localhost:4455`
-2. **Pre-roll**: Wait for CS2 to settle at target tick (parse console.log or wait fixed delay)
-3. **Start recording**: Call `StartRecord` via OBS WebSocket
-4. **Playback**: Allow CS2 to play through the highlight duration (based on tick count / tick rate + padding)
-5. **Stop recording**: Call `StopRecord` via OBS WebSocket
-6. **Retrieve file**: OBS returns the saved file path; copy/rename it to app's clips folder
+#### Stage D: OBS WebSocket Recording Control (v5)
+1. **Connect**: Use `obs-websocket-js` (v5) to connect to `ws://host:port` with password
+2. **Auto-Configure**: Create "CS2FragForge" scene + Game Capture source for CS2 window via OBS WebSocket API
+3. **Pre-roll**: Wait for CS2 to settle at target tick (parse console.log or wait fixed delay)
+4. **Start recording**: Call `StartRecord` via OBS WebSocket — CS2 launches once, OBS records continuously
+5. **Playback**: Navigate through all highlights sequentially using combined autoexec.cfg with `wait` commands
+6. **Stop recording**: Call `StopRecord` via OBS WebSocket
+7. **Retrieve file**: Get output path from `GetRecordStatus`; use FFmpeg to split into individual clips based on timestamps
 
-#### Stage E: Fallback Recording (CS2 `startmovie`)
-If OBS is unavailable:
-1. Write to CFG:
-   ```cfg
-   startmovie highlights/hl_001_  // outputs TGA frames + WAV
-   ```
-2. After playback:
-   ```cfg
-   endmovie
-   ```
-3. Use FFmpeg to compose TGA frames + WAV into MP4:
-   ```bash
-   ffmpeg -framerate 60 -i hl_001_%04d.tga -i hl_001.wav -c:v libx264 -crf 18 -c:a aac output.mp4
-   ```
+#### Stage E: ~~Fallback Recording (CS2 `startmovie`)~~ — 已废弃
+CS2 `startmovie` 不可靠（CS2 不执行 CFG 脚本），已完全切换到 OBS WebSocket 方案。
 
 #### Stage F: Async Orchestration & Progress
 The recording loop runs as an async state machine in the Electron main process:
@@ -416,11 +405,11 @@ ffmpeg(videoPath)
 | Implement `DemoLauncher` (copy .dem, build launch args) | Dev | Yes (with above) |
 | Implement `CfgWriter` (generate .cfg files per highlight) | Dev | Yes (with above) |
 | Implement `ConsoleLogWatcher` (tail -f console.log) | Dev | Yes (with above) |
-| Implement `OBSService` (obs-websocket-js connect/start/stop) | Dev | No |
-| Implement `RecordingOrchestrator` (async state machine) | Dev | No |
+| Implement `OBSService` (obs-websocket-js connect/auto-configure/start/stop) | Dev | No |
+| Implement `RecordingOrchestrator` (async state machine, single session) | Dev | No |
 | Add progress IPC channel (`recording:state-update`) | Dev | Yes (with above) |
 | Build RecordingPage UI (progress bars, status log, cancel button) | Dev | Yes (with above) |
-| Implement `startmovie` fallback path | Dev | No (deferred to v1) |
+| ~~Implement `startmovie` fallback path~~ | - | 已废弃 |
 | Write integration tests with mocked CS2/OBS | Dev | Yes (with above) |
 
 **Validation**: 
@@ -639,14 +628,15 @@ OBSService.test.ts
 - [ ] `/detect_highlights` correctly identifies a 1v2 clutch in test data.
 - [ ] All pytest tests pass (coverage ≥ 80%).
 
-### Phase 2 — CS2 Recording Pipeline
+### Phase 2 — CS2 Recording Pipeline (OBS WebSocket)
 - [ ] App auto-detects CS2 path within 2s on a standard Steam install.
-- [ ] Clicking "Record" copies `.dem` to `replays/` and launches `cs2.exe`.
-- [ ] Generated `.cfg` file contains correct `demo_gototick` for the first highlight.
-- [ ] OBS WebSocket connects and starts/stop recording successfully.
-- [ ] After recording, an `.mp4` file exists in the project's clips folder.
+- [ ] Clicking "Record" connects to OBS WebSocket and auto-configures scene.
+- [ ] Generated combined `.cfg` file contains correct `demo_gototick` + `wait` sequences for all highlights.
+- [ ] OBS WebSocket connects, creates scene, and starts/stops recording successfully.
+- [ ] CS2 launches once, plays through all highlights, then exits.
+- [ ] After recording, FFmpeg splits OBS output into individual `.mp4` clips in the project's clips folder.
 - [ ] Recording progress UI updates at least every 1s.
-- [ ] Cancel button kills CS2 and stops OBS recording without corrupting files.
+- [ ] Cancel button stops OBS recording and kills CS2 without corrupting files.
 
 ### Phase 3 — Video Editor
 - [ ] User can import a recorded clip and see it on the timeline.
@@ -674,12 +664,12 @@ OBSService.test.ts
 | Risk | Impact | Mitigation |
 |------|--------|------------|
 | CS2 registry path detection fails on non-standard installs | High | Allow manual path override in Settings |
-| OBS WebSocket not enabled or wrong password | High | Clear setup instructions + connection test modal |
+| OBS WebSocket not enabled or wrong password | High | Clear setup instructions + connection test modal + auto-configure scene |
 | CS2 console command behavior changes in updates | Medium | Monitor CS2 patch notes; abstract command generation |
 | demoparser2 breaks with new CS2 demo format | Medium | Pin version; have fallback parser (awpy) |
 | Recording is too slow (launch CS2 per highlight) | Medium | Batch recordings in single CS2 session; cache recorded clips |
 | Electron + FFmpeg bundle size too large | Low | Use `electron-builder` compression; lazy-load Python deps |
-| `startmovie` TGA frame generation is huge/slow | Medium | Primary is OBS; `startmovie` is fallback only |
+| ~~`startmovie` TGA frame generation is huge/slow~~ | N/A | 已废弃 startmovie，完全使用 OBS WebSocket |
 | Windows-only (registry dependency) | Low | MVP is Windows-only; abstract path resolver for future macOS/Linux |
 
 ---

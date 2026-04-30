@@ -80,7 +80,7 @@ export const ProjectPage: React.FC = () => {
       if (sortBy === 'round') return a.round - b.round
       return a.type.localeCompare(b.type)
     })
-  }, [filteredHighlights, sortBy])
+  }, [filteredHighlights, sortBy, project, selectedPlayerFilter, selectedTypeFilter])
 
   const uniquePlayers = useMemo(() => {
     if (!project) return []
@@ -141,6 +141,7 @@ export const ProjectPage: React.FC = () => {
               className="px-4 py-1.5 text-sm bg-cs2-gold hover:bg-cs2-gold-dark rounded-lg text-cs2-deep font-medium transition-colors disabled:opacity-50"
               disabled={highlights.filter((h) => h.selected).length === 0}
               title={t('project.recordTooltip')}
+              onClick={() => navigate('/recording')}
             >
               <Play className="w-4 h-4 inline mr-1" />
               {t('project.recordHighlights')}
