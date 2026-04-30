@@ -14,8 +14,7 @@ const {
   mockSendCommand,
   mockWatcherStart,
   mockWatcherStop,
-  mockWriteCombinedCfg,
-  mockRestoreAutoexecCfg,
+  mockWriteCustomCfg,
   mockSplitVideo,
   mockCleanupObsRecording,
   mockGetFfmpegPath
@@ -32,22 +31,28 @@ const {
   mockSendCommand: vi.fn(),
   mockWatcherStart: vi.fn(),
   mockWatcherStop: vi.fn(),
-  mockWriteCombinedCfg: vi.fn(),
-  mockRestoreAutoexecCfg: vi.fn(),
+  mockWriteCustomCfg: vi.fn(),
   mockSplitVideo: vi.fn(),
   mockCleanupObsRecording: vi.fn(),
   mockGetFfmpegPath: vi.fn()
 }))
 
-let mockWatcherCallback: ((event: { type: string; data?: string }) => void) | null = null
+let mockWatcherCallbacks: Array<(event: { type: string; data?: string }) => void> = []
 
 // Mock electron
 vi.mock('electron', () => ({
   app: { isPackaged: false }
 }))
 
-// Mock fs/promises
+// Mock fs/promises — must have default export for `import fs from 'fs/promises'`
 vi.mock('fs/promises', () => ({
+  default: {
+    access: vi.fn().mockResolvedValue(undefined),
+    mkdir: vi.fn().mockResolvedValue(undefined),
+    writeFile: vi.fn().mockResolvedValue(undefined),
+    copyFile: vi.fn().mockResolvedValue(undefined),
+    unlink: vi.fn().mockResolvedValue(undefined)
+  },
   access: vi.fn().mockResolvedValue(undefined),
   mkdir: vi.fn().mockResolvedValue(undefined),
   writeFile: vi.fn().mockResolvedValue(undefined),
@@ -78,13 +83,13 @@ vi.mock('../../src/main/demo-launcher', () => ({
   }
 }))
 
-// Mock ConsoleLogWatcher — use constructor function so `new ConsoleLogWatcher()` works correctly
+// Mock ConsoleLogWatcher — queue callbacks since orchestrator creates 2 sequential watchers
 vi.mock('../../src/main/console-log-watcher', () => ({
   ConsoleLogWatcher: function (
     _path: string,
     callback: (event: { type: string; data?: string }) => void
   ) {
-    mockWatcherCallback = callback
+    mockWatcherCallbacks.push(callback)
     this.start = mockWatcherStart
     this.stop = mockWatcherStop
   }
@@ -92,8 +97,7 @@ vi.mock('../../src/main/console-log-watcher', () => ({
 
 // Mock cfg-writer
 vi.mock('../../src/main/cfg-writer', () => ({
-  writeCombinedCfg: mockWriteCombinedCfg,
-  restoreAutoexecCfg: mockRestoreAutoexecCfg
+  writeCustomCfg: mockWriteCustomCfg
 }))
 
 // Mock video-post-processor
@@ -150,11 +154,12 @@ describe('RecordingOrchestrator', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.useFakeTimers()
+    mockWatcherCallbacks = []
     onProgress = vi.fn()
 
     // Default successful mocks
     mockCopyDemo.mockResolvedValue('test.dem')
-    mockWriteCombinedCfg.mockResolvedValue('D:\\cfg\\autoexec.cfg')
+    mockWriteCustomCfg.mockResolvedValue('D:\\cfg\\cs2fragforge_combined.cfg')
     mockLaunch.mockResolvedValue(undefined)
     mockObsConnect.mockResolvedValue(undefined)
     mockObsDisconnect.mockResolvedValue(undefined)
@@ -169,8 +174,18 @@ describe('RecordingOrchestrator', () => {
     mockCleanupObsRecording.mockResolvedValue(undefined)
     mockGetFfmpegPath.mockReturnValue('C:\\ffmpeg\\ffmpeg.exe')
     mockTerminate.mockResolvedValue(undefined)
-    mockRestoreAutoexecCfg.mockResolvedValue(undefined)
-    mockWatcherStart.mockResolvedValue(undefined)
+    // Default: fire cs2-ready on 1st watcher, demo-loaded on 2nd (sequential)
+    let watcherSeq = 0
+    mockWatcherStart.mockImplementation(() => {
+      const idx = watcherSeq++
+      setTimeout(() => {
+        if (idx === 0 && mockWatcherCallbacks.length > 0) {
+          mockWatcherCallbacks[0]?.({ type: 'cs2-ready' })
+        } else if (idx === 1 && mockWatcherCallbacks.length > 1) {
+          mockWatcherCallbacks[1]?.({ type: 'demo-loaded' })
+        }
+      }, 10)
+    })
     mockWatcherStop.mockResolvedValue(undefined)
   })
 
@@ -200,11 +215,8 @@ describe('RecordingOrchestrator', () => {
     const orchestrator = new RecordingOrchestrator(onProgress)
 
     // Trigger demo loaded after 10ms
-    mockWatcherStart.mockImplementation(() => {
-      setTimeout(() => {
-        mockWatcherCallback?.({ type: 'demo-loaded' })
-      }, 10)
-    })
+
+    // Uses default sequential mockWatcherStart from beforeEach
 
     const recordPromise = orchestrator.record(mockRequest)
     await vi.advanceTimersByTimeAsync(70_000)
@@ -227,23 +239,20 @@ describe('RecordingOrchestrator', () => {
     expect(mockObsEnsureScene).toHaveBeenCalledWith('CS2FragForge')
     expect(mockObsEnsureGameCaptureSource).toHaveBeenCalledWith('CS2FragForge', 'CS2 Game Capture')
     expect(mockCopyDemo).toHaveBeenCalledWith(mockRequest.demoPath)
-    expect(mockWriteCombinedCfg).toHaveBeenCalled()
-    expect(mockLaunch).toHaveBeenCalledWith('test.dem', 'autoexec.cfg')
+    expect(mockWriteCustomCfg).toHaveBeenCalled()
+    expect(mockLaunch).toHaveBeenCalled()
     expect(mockObsStartRecording).toHaveBeenCalled()
     expect(mockObsStopRecording).toHaveBeenCalled()
     expect(mockSplitVideo).toHaveBeenCalled()
     expect(mockTerminate).toHaveBeenCalled()
-    expect(mockRestoreAutoexecCfg).toHaveBeenCalled()
+    expect(mockSendCommand).toHaveBeenCalledWith('exec cs2fragforge_combined.cfg')
   })
 
   it('should report progress through all stages', async () => {
     const orchestrator = new RecordingOrchestrator(onProgress)
 
-    mockWatcherStart.mockImplementation(() => {
-      setTimeout(() => {
-        mockWatcherCallback?.({ type: 'demo-loaded' })
-      }, 10)
-    })
+
+    // Uses default sequential mockWatcherStart from beforeEach
 
     const recordPromise = orchestrator.record(mockRequest)
     await vi.advanceTimersByTimeAsync(70_000)
@@ -286,7 +295,10 @@ describe('RecordingOrchestrator', () => {
     mockObsStartRecording.mockRejectedValue(new Error('Recording failed'))
     const orchestrator = new RecordingOrchestrator(onProgress)
 
-    const result = await orchestrator.record(mockRequest)
+    const recordPromise = orchestrator.record(mockRequest)
+    // Must advance past demo load timeout (45s) before OBS start recording is reached
+    await vi.advanceTimersByTimeAsync(50_000)
+    const result = await recordPromise
 
     expect(result.success).toBe(false)
     expect(result.error).toBe('Recording failed')
@@ -301,23 +313,20 @@ describe('RecordingOrchestrator', () => {
     })
 
     const recordPromise = orchestrator.record(mockRequest)
-    // Advance past demo load timeout (45s) + recording duration (~60s)
-    await vi.advanceTimersByTimeAsync(120_000)
+    // Advance past cs2-ready timeout (60s) + 3s delay + demo load timeout (45s) + recording (~60s)
+    await vi.advanceTimersByTimeAsync(200_000)
     await recordPromise
 
     // Should still complete (proceeds with warning)
-    expect(mockSendCommand).toHaveBeenCalledWith('exec autoexec.cfg')
+    expect(mockSendCommand).toHaveBeenCalledWith('exec cs2fragforge_combined.cfg')
   })
 
   it('should handle FFmpeg split partial failure', async () => {
     mockSplitVideo.mockRejectedValue(new Error('FFmpeg error'))
     const orchestrator = new RecordingOrchestrator(onProgress)
 
-    mockWatcherStart.mockImplementation(() => {
-      setTimeout(() => {
-        mockWatcherCallback?.({ type: 'demo-loaded' })
-      }, 10)
-    })
+
+    // Uses default sequential mockWatcherStart from beforeEach
 
     const recordPromise = orchestrator.record(mockRequest)
     await vi.advanceTimersByTimeAsync(70_000)
@@ -370,11 +379,8 @@ describe('RecordingOrchestrator', () => {
   it('should calculate correct clip durations', async () => {
     const orchestrator = new RecordingOrchestrator(onProgress)
 
-    mockWatcherStart.mockImplementation(() => {
-      setTimeout(() => {
-        mockWatcherCallback?.({ type: 'demo-loaded' })
-      }, 10)
-    })
+
+    // Uses default sequential mockWatcherStart from beforeEach
 
     const recordPromise = orchestrator.record(mockRequest)
     await vi.advanceTimersByTimeAsync(70_000)
@@ -389,11 +395,8 @@ describe('RecordingOrchestrator', () => {
   it('should build correct output filenames', async () => {
     const orchestrator = new RecordingOrchestrator(onProgress)
 
-    mockWatcherStart.mockImplementation(() => {
-      setTimeout(() => {
-        mockWatcherCallback?.({ type: 'demo-loaded' })
-      }, 10)
-    })
+
+    // Uses default sequential mockWatcherStart from beforeEach
 
     const recordPromise = orchestrator.record(mockRequest)
     await vi.advanceTimersByTimeAsync(70_000)
@@ -413,11 +416,8 @@ describe('RecordingOrchestrator', () => {
   it('should disconnect OBS on completion', async () => {
     const orchestrator = new RecordingOrchestrator(onProgress)
 
-    mockWatcherStart.mockImplementation(() => {
-      setTimeout(() => {
-        mockWatcherCallback?.({ type: 'demo-loaded' })
-      }, 10)
-    })
+
+    // Uses default sequential mockWatcherStart from beforeEach
 
     const recordPromise = orchestrator.record(mockRequest)
     await vi.advanceTimersByTimeAsync(70_000)
@@ -426,30 +426,24 @@ describe('RecordingOrchestrator', () => {
     expect(mockObsDisconnect).toHaveBeenCalled()
   })
 
-  it('should restore autoexec.cfg on completion', async () => {
+  it('should inject exec command via stdin after demo load', async () => {
     const orchestrator = new RecordingOrchestrator(onProgress)
 
-    mockWatcherStart.mockImplementation(() => {
-      setTimeout(() => {
-        mockWatcherCallback?.({ type: 'demo-loaded' })
-      }, 10)
-    })
+
+    // Uses default sequential mockWatcherStart from beforeEach
 
     const recordPromise = orchestrator.record(mockRequest)
     await vi.advanceTimersByTimeAsync(70_000)
     await recordPromise
 
-    expect(mockRestoreAutoexecCfg).toHaveBeenCalled()
+    expect(mockSendCommand).toHaveBeenCalledWith('exec cs2fragforge_combined.cfg')
   })
 
   it('should cleanup OBS recording file after split', async () => {
     const orchestrator = new RecordingOrchestrator(onProgress)
 
-    mockWatcherStart.mockImplementation(() => {
-      setTimeout(() => {
-        mockWatcherCallback?.({ type: 'demo-loaded' })
-      }, 10)
-    })
+
+    // Uses default sequential mockWatcherStart from beforeEach
 
     const recordPromise = orchestrator.record(mockRequest)
     await vi.advanceTimersByTimeAsync(70_000)

@@ -1,7 +1,7 @@
 import fs from 'fs'
 
 export interface ConsoleEvent {
-  type: 'demo-loaded' | 'tick-reached' | 'error' | 'line'
+  type: 'cs2-ready' | 'demo-loaded' | 'tick-reached' | 'error' | 'line'
   data?: string
   tick?: number
 }
@@ -82,7 +82,12 @@ export class ConsoleLogWatcher {
   private processLine(line: string): void {
     this.onEvent({ type: 'line', data: line })
 
-    // CS2 demo loaded detection — check multiple patterns for robustness
+    // CS2 main-menu ready: autoexec processed → engine initialized, console accepts commands
+    if (line.includes('Host_WriteConfiguration')) {
+      this.onEvent({ type: 'cs2-ready' })
+    }
+
+    // CS2 demo loaded detection — checked after playdemo is injected via stdin
     if (
       line.includes('Playing demo from') ||
       line.includes('Demo playback started') ||

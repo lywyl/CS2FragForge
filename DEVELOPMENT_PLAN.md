@@ -1,9 +1,9 @@
 # CS2 Demo Cutter — 开发计划与进度追踪
 
 > **生成日期**: 2026-04-29
-> **最后更新**: 2026-04-30
-> **版本**: v2.2
-> **状态**: 开发中 — 录制方案切换：startmovie → OBS WebSocket v5, 58 tests, CI/CD已配置
+> **最后更新**: 2026-05-01
+> **版本**: v2.3
+> **状态**: 开发中 — OBS WebSocket v5 录制管线完成, 104 tests, 待 E2E 手动测试
 
 ---
 
@@ -12,10 +12,10 @@
 | 维度 | 状态 |
 |------|------|
 | 技术栈 | Electron 33 + Vite + React 18 + TypeScript + Tailwind + Python FastAPI + demoparser2 + obs-websocket-js |
-| 当前阶段 | Phase 2.5 🔧 (OBS WebSocket集成中), Phase 4 ✅, Phase 5.2 ✅, Phase 5.3 ✅, CI/CD ✅ |
+| 当前阶段 | Phase 2.5 ✅ (OBS WebSocket完成), Phase 4 ✅, Phase 5.2 ✅, Phase 5.3 ✅, CI/CD ✅ |
 | 核心功能 | Demo解析 + Highlights检测 + **OBS WebSocket 录制** + 前端UI + FFmpeg导出管线 + 音频混合 + 中英切换 + 设置持久化 + Toast通知 |
 | 可打包性 | ⚠️ extraResources已配置, embed Python需构建 |
-| 测试覆盖 | Python 24 tests (85% cov) + JS 91 tests 全部通过 |
+| 测试覆盖 | Python 24 tests (85% cov) + JS 104 tests 全部通过 |
 | UI完成度 | ~95% (全页面功能完成，含录制页，仅剩 AI 评分可选功能) |
 
 **下一步**：
@@ -100,7 +100,7 @@ Phase 0 ──► Phase 1 ──► Phase 2 ──► Phase 3 ──► Phase 4 
 | 2.3.2 | OBS 自动配置场景（创建场景 + CS2 Game Capture） | `obs-service.ts` | 0.5d | P0 | ✅ |
 | 2.3.3 | 组合 autoexec.cfg 生成器（多 highlight + wait 序列） | `cfg-writer.ts` | 0.5d | P0 | ✅ |
 | 2.3.4 | FFmpeg 切割服务（按时间戳切割单录制为多片段） | `video-post-processor.ts` | 0.5d | P0 | ✅ |
-| 2.3.5 | RecordingOrchestrator 重构（单次会话 + OBS 录制） | `recording-orchestrator.ts` | 1d | P0 | 🔧 进行中 |
+| 2.3.5 | RecordingOrchestrator 重构（单次会话 + OBS 录制 + finally 清理） | `recording-orchestrator.ts` | 1d | P0 | ✅ |
 | 2.3.6 | Settings 添加 OBS 连接配置 + 测试连接按钮 | `SettingsPage.tsx` | 0.5d | P1 | ✅ |
 | 2.3.7 | RecordingPage 传递 OBS 设置 | `RecordingPage.tsx` | 0.25d | P1 | ✅ |
 | 2.3.8 | IPC 通道 + preload 桥接（OBS 测试连接） | `ipc.ts` + `preload` | 0.25d | P1 | ✅ |
@@ -377,7 +377,7 @@ Phase 5 (打包&打磨)
 | Phase 2.1 | 环境发现 (Steam/CS2) | ✅ 完成 | 2026-04-29 | 2026-04-29 | Steam注册表+CS2路径+replays+环境检测 |
 | Phase 2.2 | CS2 控制 (startmovie h264) | ✅ 完成 | 2026-04-30 | 2026-04-30 | CFG生成+进程启动+console.log监听+MP4后处理 |
 | Phase 2.3 | ~~startmovie h264~~ | ❌ 废弃 | 2026-04-30 | 2026-04-30 | CS2 不执行 CFG 脚本，录制失败 |
-| Phase 2.5 | OBS WebSocket 集成 | 🔧 待实现 | - | - | OBSService+自动场景+单次会话+FFmpeg切割 |
+| Phase 2.5 | OBS WebSocket 集成 | ✅ 完成 | 2026-04-30 | 2026-05-01 | OBSService+自动场景+单次会话+FFmpeg切割+finally清理+cancel增强 |
 | Phase 2.4 | 录制编排 (状态机) | ✅ 完成 | 2026-04-30 | 2026-04-30 | RecordingOrchestrator+进度IPC+取消+批量录制 |
 | Phase 3.1 | 前端基础设施 | ✅ 完成 | 2026-04-29 | 2026-04-29 | react-router+lucide+布局美化+ErrorBoundary |
 | Phase 3.2 | Welcome 页 | ✅ 完成 | 2026-04-29 | 2026-04-29 | 拖放区域+文件选择+Python后端联动 |
@@ -396,26 +396,29 @@ Phase 5 (打包&打磨)
 | CI/CD | GitHub Actions | ✅ 完成 | 2026-04-30 | 2026-04-30 | lint→test→build-windows 三阶段流水线, lefthook pre-commit test |
 | Bugfix | 拖放+fetch+类型修复 | ✅ 完成 | 2026-04-30 | 2026-04-30 | webUtils.getPathForFile + .venv创建 + callPythonAPI重试 + cs2FindPath类型 |
 | Settings | OBS移除+CS2自动检测 | ✅ 完成 | 2026-04-30 | 2026-04-30 | 移除OBS设置项, 添加CS2路径自动检测按钮, 清理i18n |
+| Bugfix | RecordingPage缺少obsConfig | ✅ 完成 | 2026-05-01 | 2026-05-01 | 添加obsConfig从settings读取到RecordingRequest |
+| Bugfix | Orchestrator cancel资源泄漏 | ✅ 完成 | 2026-05-01 | 2026-05-01 | cancel()停止OBS, cancelResult()调用cleanup, finally统一清理, 幂等cleanup |
+| Bugfix | orchestrator测试修复 | ✅ 完成 | 2026-05-01 | 2026-05-01 | fs/promises mock添加default导出, 测试推进fake timers |
 | Phase 6 | AI & 高级功能 | ⬜ 待开始 | - | - | 可选，P2 |
 
 ---
 
 ## 七、下一步行动
 
-录制方案已从 startmovie 切换到 OBS WebSocket v5。推荐优先级：
+OBS WebSocket v5 录制管线已全部完成。推荐优先级：
 
 | 优先级 | 任务 | 预计工时 | 前置条件 | 说明 |
 |--------|------|----------|----------|------|
-| **P0** | Phase 2.5 OBS WebSocket 集成 | 2d | OBS Studio + obs-websocket-js | 自动场景配置 + 单次会话连续录制 + FFmpeg 切割 |
-| **P0** | E2E 手动测试 | 0.5d | CS2 + demo + OBS | 验证完整录制流程：demo → highlights → OBS 录制 → MP4 |
+| **P0** | E2E 手动测试 | 0.5d | CS2 + demo + OBS Studio | 验证完整录制流程：demo → highlights → OBS 录制 → FFmpeg 切割 → MP4 |
 | **P2** | Phase 6 AI 评分 (可选) | 2d | 无 | OpenAI/Claude API 集成 |
 
 **开发者提示**：
 - **录制使用 OBS WebSocket v5**（需安装 OBS Studio + 启用 WebSocket 服务器）
-- npm 依赖：`npm install obs-websocket-js`
-- 录制流程：CS2 启动一次 → OBS 连续录制所有 highlights → FFmpeg 切割为独立片段
-- OBS 自动配置：应用自动创建 "CS2FragForge" 场景 + Game Capture 源捕获 CS2 窗口
+- OBS 配置在 Settings 页：填写 host/port/password → 测试连接
+- 录制流程：OBS 连接 → 自动场景配置 → CS2 启动一次 → OBS 连续录制 → FFmpeg 切割 → 独立片段
+- OBS 自动配置：创建 "CS2FragForge" 场景 + Game Capture 源（foreground_window 模式）
 - 用户需在 OBS 中设置输出路径（设置 → 输出 → 录制 → 录像路径）
+- cancel 流程：停止 OBS 录制 → 断开 OBS → 终止 CS2 → 恢复 autoexec.cfg（全部由 finally 块保证）
 - 新增 i18n 字符串时，同时更新 `en.ts` 和 `zh.ts`（目前 140+ 条）
 - Python 依赖安装：`python -m venv .venv && .venv/Scripts/pip install -r src/python/requirements.txt`
 - 拖放文件使用 `webUtils.getPathForFile()`（Electron 33 不再支持 `File.path`）

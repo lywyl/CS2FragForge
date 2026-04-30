@@ -1,59 +1,61 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-// Track whether to simulate connection failure
-let shouldFailConnect = false
+const { setFailConnect, MockOBSClass } = vi.hoisted(() => {
+  let failConnect = false
 
-// Mock obs-websocket-js
-vi.mock('obs-websocket-js', () => {
-  return {
-    default: class MockOBS {
-      identified = false
+  class MockOBS {
+    identified = false
 
-      async connect(_url?: string, _password?: string): Promise<void> {
-        if (shouldFailConnect) {
-          throw new Error('Connection refused')
-        }
-        this.identified = true
+    async connect(_url?: string, _password?: string): Promise<void> {
+      if (failConnect) {
+        throw new Error('Connection refused')
       }
+      this.identified = true
+    }
 
-      async disconnect(): Promise<void> {
-        this.identified = false
-      }
+    async disconnect(): Promise<void> {
+      this.identified = false
+    }
 
-      async call(requestType: string, _requestData?: unknown): Promise<unknown> {
-        switch (requestType) {
-          case 'GetSceneList':
-            return {
-              scenes: [{ sceneName: 'Scene 1' }, { sceneName: 'Scene 2' }],
-              currentProgramSceneName: 'Scene 1'
-            }
-          case 'CreateScene':
-            return { sceneUuid: 'new-uuid' }
-          case 'SetCurrentProgramScene':
-            return undefined
-          case 'CreateInput':
-            return { inputUuid: 'input-uuid', sceneItemId: 1 }
-          case 'StartRecord':
-            return undefined
-          case 'StopRecord':
-            return { outputPath: 'C:\\Recordings\\test.mp4' }
-          case 'GetRecordStatus':
-            return { outputActive: true, outputPaused: false }
-          case 'GetRecordDirectory':
-            return { recordDirectory: 'C:\\Recordings' }
-          case 'GetVersion':
-            return {
-              obsVersion: '30.0.0',
-              obsWebSocketVersion: '5.0.8',
-              rpcVersion: 1
-            }
-          default:
-            throw new Error(`Unknown request type: ${requestType}`)
-        }
+    async call(requestType: string, _requestData?: unknown): Promise<unknown> {
+      switch (requestType) {
+        case 'GetSceneList':
+          return {
+            scenes: [{ sceneName: 'Scene 1' }, { sceneName: 'Scene 2' }],
+            currentProgramSceneName: 'Scene 1'
+          }
+        case 'CreateScene':
+          return { sceneUuid: 'new-uuid' }
+        case 'SetCurrentProgramScene':
+          return undefined
+        case 'CreateInput':
+          return { inputUuid: 'input-uuid', sceneItemId: 1 }
+        case 'StartRecord':
+          return undefined
+        case 'StopRecord':
+          return { outputPath: 'C:\\Recordings\\test.mp4' }
+        case 'GetRecordStatus':
+          return { outputActive: true, outputPaused: false }
+        case 'GetRecordDirectory':
+          return { recordDirectory: 'C:\\Recordings' }
+        case 'GetVersion':
+          return {
+            obsVersion: '30.0.0',
+            obsWebSocketVersion: '5.0.8',
+            rpcVersion: 1
+          }
+        default:
+          throw new Error(`Unknown request type: ${requestType}`)
       }
     }
   }
+  return { setFailConnect: (v: boolean) => { failConnect = v }, MockOBSClass: MockOBS }
 })
+
+vi.mock('obs-websocket-js', () => ({
+  OBSWebSocket: MockOBSClass,
+  default: MockOBSClass
+}))
 
 import { OBSService } from '../../src/main/obs-service'
 
@@ -62,7 +64,7 @@ describe('OBSService', () => {
 
   beforeEach(() => {
     service = new OBSService()
-    shouldFailConnect = false
+    setFailConnect(false)
   })
 
   describe('connect/disconnect lifecycle', () => {
@@ -200,7 +202,7 @@ describe('OBSService', () => {
 
     it('should return failure on connection error', async () => {
       // Enable connection failure simulation
-      shouldFailConnect = true
+      setFailConnect(true)
 
       const result = await service.testConnection({
         host: '192.168.1.999',
@@ -212,7 +214,7 @@ describe('OBSService', () => {
       expect(result.version).toBeUndefined()
 
       // Reset for other tests
-      shouldFailConnect = false
+      setFailConnect(false)
     })
 
     it('should disconnect after test even on success', async () => {

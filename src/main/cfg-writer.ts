@@ -55,9 +55,27 @@ export function buildCombinedCfgContent(config: CombinedCfgConfig): string {
 }
 
 /**
+ * Write combined CFG to a custom-named file (NOT autoexec.cfg).
+ * This avoids the timing issue where autoexec runs before the demo loads.
+ * The file is later exec'd via CS2's stdin after the demo is confirmed loaded.
+ * Returns the filename only (not full path), used for `exec <filename>` command.
+ */
+export async function writeCustomCfg(
+  config: CombinedCfgConfig,
+  cfgDir: string,
+  cfgName: string
+): Promise<string> {
+  await fs.mkdir(cfgDir, { recursive: true })
+  const cfgPath = path.join(cfgDir, cfgName)
+  await fs.writeFile(cfgPath, buildCombinedCfgContent(config), 'utf-8')
+  return cfgPath
+}
+
+/**
  * Write combined CFG for all highlights to autoexec.cfg.
  * Backs up existing autoexec.cfg if present.
  * Returns path to written file.
+ * @deprecated Use writeCustomCfg instead — autoexec runs before demo loads in CS2.
  */
 export async function writeCombinedCfg(
   config: CombinedCfgConfig,

@@ -3,7 +3,7 @@ import fs from 'fs/promises'
 import { DemoLauncher } from './demo-launcher'
 import { ConsoleLogWatcher } from './console-log-watcher'
 import { OBSService } from './obs-service'
-import { writeCombinedCfg, restoreAutoexecCfg } from './cfg-writer'
+import { writeCustomCfg } from './cfg-writer'
 import { splitVideo, cleanupObsRecording } from './video-post-processor'
 import { getFfmpegPath } from './ffmpeg'
 import type {
@@ -28,6 +28,7 @@ export class RecordingOrchestrator {
   private cfgDir: string | null = null
   private autoexecPath: string | null = null
   private obsRecordingActive = false
+  private cleanedUp = false
 
   constructor(private onProgress: (progress: RecordingProgress) => void) {}
 
@@ -38,6 +39,7 @@ export class RecordingOrchestrator {
 
     this.isCancelled = false
     this.obsRecordingActive = false
+    this.cleanedUp = false
     const clips: RecordingClipResult[] = []
 
     try {
@@ -53,7 +55,7 @@ export class RecordingOrchestrator {
         return { success: false, clips, error: msg }
       }
 
-      if (this.isCancelled) return this.cancelResult(clips, request.highlights.length)
+      if (this.isCancelled) return await this.cancelResult(clips, request.highlights.length)
 
       // Step 2: Configure OBS scene + source
       this.reportProgress('configuring-obs', 10, 0, request.highlights.length, 'preparing', 'Configuring OBS scene...')
@@ -67,17 +69,21 @@ export class RecordingOrchestrator {
         return { success: false, clips, error: msg }
       }
 
-      if (this.isCancelled) return this.cancelResult(clips, request.highlights.length)
+      if (this.isCancelled) return await this.cancelResult(clips, request.highlights.length)
 
-      // Step 3: Copy demo + write combined CFG
-      this.reportProgress('preparing', 15, 0, request.highlights.length, 'preparing', 'Preparing demo and config...')
+      // Step 3: Copy demo + write combined CFG (custom file, NOT autoexec.cfg)
+      this.reportProgress('preparing', 10, 0, request.highlights.length, 'preparing', 'Preparing demo and config...')
       this.demoLauncher = new DemoLauncher(request.cs2Path)
-      const demoName = await this.demoLauncher.copyDemoToReplays(request.demoPath)
+
+      // Store demo basename without extension for playdemo command (CS2 omits .dem)
+      const demoFileBase = path.basename(request.demoPath, '.dem')
+      await this.demoLauncher.copyDemoToReplays(request.demoPath)
 
       this.cfgDir = path.join(request.cs2Path, 'game', 'csgo', 'cfg')
       const outputDir = request.outputDir ?? path.join(path.dirname(request.demoPath), 'clips')
 
-      this.autoexecPath = await writeCombinedCfg(
+      const combinedCfgName = 'cs2fragforge_combined.cfg'
+      this.autoexecPath = await writeCustomCfg(
         {
           highlights: request.highlights.map((h) => ({
             id: h.id,
@@ -91,15 +97,16 @@ export class RecordingOrchestrator {
           preRoll: request.preRoll,
           postRoll: request.postRoll
         },
-        this.cfgDir
+        this.cfgDir,
+        combinedCfgName
       )
 
-      if (this.isCancelled) return this.cancelResult(clips, request.highlights.length)
+      if (this.isCancelled) return await this.cancelResult(clips, request.highlights.length)
 
-      // Step 4: Launch CS2
-      this.reportProgress('launching-cs2', 20, 0, request.highlights.length, 'launching', 'Launching CS2...')
+      // Step 4: Launch CS2 (bare-bones — no +playdemo, no +exec)
+      this.reportProgress('launching-cs2', 15, 0, request.highlights.length, 'launching', 'Launching CS2...')
       try {
-        await this.demoLauncher.launch(demoName, 'autoexec.cfg')
+        await this.demoLauncher.launch()
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'CS2 launch failed'
         await this.obsService.disconnect()
@@ -107,19 +114,31 @@ export class RecordingOrchestrator {
         return { success: false, clips, error: msg }
       }
 
-      if (this.isCancelled) return this.cancelResult(clips, request.highlights.length)
+      if (this.isCancelled) return await this.cancelResult(clips, request.highlights.length)
 
-      // Step 5: Wait for demo load
-      this.reportProgress('waiting-load', 25, 0, request.highlights.length, 'loading', 'Waiting for demo to load...')
-      const loadResult = await this.waitForDemoLoad(request.cs2Path)
-
-      if (loadResult.timedOut) {
-        console.warn('[Orchestrator] Demo load timed out — proceeding anyway')
-        // Safety fallback: send exec via stdin
-        this.demoLauncher.sendCommand('exec autoexec.cfg')
+      // Step 5: Wait for CS2 main menu, then inject ALL commands via stdin
+      this.reportProgress('waiting-load', 20, 0, request.highlights.length, 'loading', 'Waiting for CS2 to start...')
+      const readyResult = await this.waitForCs2Ready(request.cs2Path)
+      if (readyResult.timedOut) {
+        console.warn('[Orchestrator] CS2 ready timed out — injecting commands anyway')
       }
 
-      if (this.isCancelled) return this.cancelResult(clips, request.highlights.length)
+      // Inject playdemo first (uses replays/ prefix, no .dem extension)
+      this.demoLauncher.sendCommand(`playdemo replays/${demoFileBase}`)
+      console.log(`[Orchestrator] Injected: playdemo replays/${demoFileBase}`)
+
+      // Wait for demo to load
+      await new Promise((r) => setTimeout(r, 3000))
+      const loadResult = await this.waitForDemoLoad(request.cs2Path)
+      if (loadResult.timedOut) {
+        console.warn('[Orchestrator] Demo load timed out — injecting CFG anyway')
+      }
+
+      // Inject the combined recording CFG
+      this.demoLauncher.sendCommand(`exec ${combinedCfgName}`)
+      console.log(`[Orchestrator] Injected: exec ${combinedCfgName}`)
+
+      if (this.isCancelled) return await this.cancelResult(clips, request.highlights.length)
 
       // Step 6: Start OBS recording
       this.reportProgress('recording', 30, 0, request.highlights.length, 'recording', 'Starting OBS recording...')
@@ -128,7 +147,6 @@ export class RecordingOrchestrator {
         this.obsRecordingActive = true
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'OBS recording start failed'
-        await this.cleanup(request)
         this.reportProgress('error', 0, 0, request.highlights.length, 'error', msg)
         return { success: false, clips, error: msg }
       }
@@ -139,7 +157,7 @@ export class RecordingOrchestrator {
         `Recording ${request.highlights.length} highlights (${Math.ceil(totalDuration)}s)...`)
       await this.waitWithProgress(totalDuration, request.highlights.length)
 
-      if (this.isCancelled) return this.cancelResult(clips, request.highlights.length)
+      if (this.isCancelled) return await this.cancelResult(clips, request.highlights.length)
 
       // Step 8: Stop OBS recording
       this.reportProgress('stopping', 70, 0, request.highlights.length, 'stopping', 'Stopping OBS recording...')
@@ -149,19 +167,17 @@ export class RecordingOrchestrator {
         this.obsRecordingActive = false
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'OBS recording stop failed'
-        await this.cleanup(request)
         this.reportProgress('error', 0, 0, request.highlights.length, 'error', msg)
         return { success: false, clips, error: msg }
       }
 
       if (!obsOutputPath) {
         const msg = 'OBS did not return output path'
-        await this.cleanup(request)
         this.reportProgress('error', 0, 0, request.highlights.length, 'error', msg)
         return { success: false, clips, error: msg }
       }
 
-      if (this.isCancelled) return this.cancelResult(clips, request.highlights.length)
+      if (this.isCancelled) return await this.cancelResult(clips, request.highlights.length)
 
       // Step 9: FFmpeg split
       this.reportProgress('splitting', 75, 0, request.highlights.length, 'preparing', 'Splitting video into clips...')
@@ -216,8 +232,8 @@ export class RecordingOrchestrator {
         }
       }
 
-      // Step 10: Cleanup
-      await this.cleanup(request)
+      // Step 10: Cleanup (also handled by finally)
+
 
       const successCount = clips.filter((c) => c.success).length
       this.reportProgress('done', 100, request.highlights.length, request.highlights.length, 'done',
@@ -226,16 +242,61 @@ export class RecordingOrchestrator {
       return { success: successCount > 0, clips }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Recording failed'
-      await this.cleanup(request)
       this.reportProgress('error', 0, 0, request.highlights.length, 'error', message)
       return { success: false, clips, error: message }
+    } finally {
+      await this.cleanup()
     }
   }
 
   cancel(): void {
     this.isCancelled = true
+    // Stop OBS recording if active
+    if (this.obsRecordingActive) {
+      this.obsService?.stopRecording().catch(() => {})
+      this.obsRecordingActive = false
+    }
+    this.obsService?.disconnect().catch(() => {})
     this.demoLauncher?.terminate()
     this.consoleWatcher?.stop()
+  }
+
+  /**
+   * Wait for CS2 to reach the main menu (engine fully initialized, console accepts commands).
+   * Detected via Host_WriteConfiguration in console.log which fires after autoexec is written.
+   */
+  private async waitForCs2Ready(cs2Path: string): Promise<{ timedOut: boolean }> {
+    return new Promise<{ timedOut: boolean }>((resolve) => {
+      const logPath = path.join(cs2Path, 'game', 'csgo', 'console.log')
+      let resolved = false
+      const t0 = Date.now()
+
+      const watcher = new ConsoleLogWatcher(logPath, (event) => {
+        if (event.type === 'cs2-ready' && !resolved) {
+          resolved = true
+          watcher.stop()
+          const elapsed = ((Date.now() - t0) / 1000).toFixed(1)
+          console.log(`[Orchestrator] CS2 ready detected after ${elapsed}s`)
+          resolve({ timedOut: false })
+        }
+        if (event.type === 'error' && !resolved) {
+          console.warn(`[Orchestrator] CS2 ready watch error: ${event.data}`)
+        }
+      })
+
+      this.consoleWatcher = watcher
+      watcher.start()
+
+      // Timeout fallback: 60s for CS2 cold start
+      setTimeout(() => {
+        if (!resolved) {
+          resolved = true
+          watcher.stop()
+          console.warn(`[Orchestrator] CS2 ready timed out after 60s`)
+          resolve({ timedOut: true })
+        }
+      }, 60_000)
+    })
   }
 
   private async waitForDemoLoad(cs2Path: string): Promise<{ timedOut: boolean }> {
@@ -336,7 +397,10 @@ export class RecordingOrchestrator {
     })
   }
 
-  private async cleanup(request: RecordingRequest): Promise<void> {
+  private async cleanup(): Promise<void> {
+    if (this.cleanedUp) return
+    this.cleanedUp = true
+
     // Stop OBS recording if active
     if (this.obsRecordingActive && this.obsService?.isConnected) {
       try {
@@ -368,10 +432,10 @@ export class RecordingOrchestrator {
       // ignore
     }
 
-    // Restore autoexec.cfg
-    if (this.cfgDir) {
+    // Delete our custom CFG file (not autoexec.cfg, so no restore needed)
+    if (this.autoexecPath) {
       try {
-        await restoreAutoexecCfg(this.cfgDir)
+        await fs.unlink(this.autoexecPath)
       } catch {
         // ignore
       }

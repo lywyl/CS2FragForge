@@ -5,7 +5,9 @@
       "Bash(npm --version)",
       "Bash(conda *)",
       "Bash(node node_modules/electron/install.js)",
-      "Bash(npx vitest *)"
+      "Bash(npx vitest *)",
+      "Bash(node *)",
+      "Bash(npx tsc *)"
     ]
   }
 }

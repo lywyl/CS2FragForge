@@ -83,7 +83,12 @@ export const RecordingPage: React.FC = () => {
       cs2Path: project.cs2InstallPath || settings.cs2InstallPath,
       preRoll: settings.preRoll,
       postRoll: settings.postRoll,
-      tickRate
+      tickRate,
+      obsConfig: {
+        host: settings.obsHost,
+        port: settings.obsPort,
+        password: settings.obsPassword || undefined
+      }
     }
 
     try {

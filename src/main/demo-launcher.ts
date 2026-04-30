@@ -22,12 +22,14 @@ export class DemoLauncher {
   }
 
   /**
-   * Launch CS2 to play a demo and optionally execute a CFG after the demo loads.
-   * The cfgName is passed as +exec after +playdemo so it runs once the demo is active.
-   * CS2's command queue preserves +commands across map loads (unlike CS:GO's Source 1),
-   * so +exec after +playdemo correctly runs after the demo finishes loading.
+   * Launch CS2 bare-bones (no playdemo on command line).
+   * All commands (playdemo, exec CFG) are injected via sendCommand() after
+   * the engine initializes, since Source 2 may not handle +commands reliably.
+   *
+   * Uses windowed mode at 720p to avoid display mode switches and speed up startup.
+   * -nobreakpad disables crash reporting overhead.
    */
-  async launch(demoName: string, cfgName?: string): Promise<void> {
+  async launch(): Promise<void> {
     this.killExistingCS2()
 
     const cs2ExePath = CS2PathResolver.getCS2ExePath(this.cs2Path)
@@ -38,13 +40,11 @@ export class DemoLauncher {
       '-nojoy',
       '-nosound',
       '-perfectworld',
-      '+playdemo',
-      demoName
+      '-windowed',
+      '-w', '1280',
+      '-h', '720',
+      '-nobreakpad'
     ]
-
-    if (cfgName) {
-      args.push('+exec', cfgName)
-    }
 
     this.cs2Process = spawn(cs2ExePath, args, {
       detached: false,

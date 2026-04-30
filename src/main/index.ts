@@ -168,7 +168,7 @@ function registerIpcHandlers(): void {
   ipcMain.handle(
     IPC_CHANNELS.OBS_TEST_CONNECTION,
     async (_event, config: { host: string; port: number; password?: string }) => {
-      const OBSWebSocket = (await import('obs-websocket-js')).default
+      const OBSWebSocket = (await import('obs-websocket-js')).OBSWebSocket
       const obs = new OBSWebSocket()
       try {
         const url = `ws://${config.host}:${config.port}`
