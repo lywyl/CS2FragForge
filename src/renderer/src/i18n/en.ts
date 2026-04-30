@@ -1,0 +1,176 @@
+export const en = {
+  // App
+  'app.title': 'CS2 Demo Cutter',
+
+  // ErrorBoundary
+  'error.title': 'Something went wrong',
+  'error.message': 'An unexpected error occurred',
+  'error.tryAgain': 'Try Again',
+  'error.reloadApp': 'Reload App',
+
+  // SidebarNav
+  'nav.home': 'Home',
+  'nav.project': 'Project',
+  'nav.recording': 'Recording',
+  'nav.editor': 'Editor',
+  'nav.export': 'Export',
+  'nav.settings': 'Settings',
+  'nav.logo': 'CS2 Cutter',
+  'nav.currentProject': 'Current Project',
+
+  // WelcomePage
+  'welcome.title': 'CS2 Demo Cutter',
+  'welcome.description': 'Automatically detect highlights from CS2 demo files and create video clips.',
+  'welcome.dropHere': 'Drop a {ext} file here',
+  'welcome.orClick': 'or click to browse',
+  'welcome.parsing': 'Parsing demo file...',
+  'welcome.supports': 'Supports CS2 demo files (.dem) — matchmaking, wingman, faceit',
+  'welcome.importVideo': 'Or import a video file to edit',
+  'welcome.error.notDem': 'Please select a .dem file',
+  'welcome.error.parseFailed': 'Failed to parse demo file',
+  'welcome.error.dialogFailed': 'Failed to open file dialog',
+  'welcome.error.videoFailed': 'Failed to open video file',
+  'welcome.error.unknownDemo': 'Unknown Demo',
+  'welcome.error.unknownVideo': 'Unknown Video',
+
+  // ProjectPage
+  'project.noDemo': 'No demo loaded. Please open a demo file first.',
+  'project.tick': '{rate} tick',
+  'project.players': '{count} players',
+  'project.close': 'Close',
+  'project.recordTooltip': 'Recording feature coming in Phase 2',
+  'project.recordHighlights': 'Record Highlights',
+  'project.highlightsFound': '{count} highlight(s) found',
+  'project.filters': 'Filters',
+  'project.sort': 'Sort:',
+  'project.sort.score': 'Score',
+  'project.sort.round': 'Round',
+  'project.sort.type': 'Type',
+  'project.player': 'Player',
+  'project.allPlayers': 'All Players',
+  'project.type': 'Type',
+  'project.noHighlights': 'No highlights match your filters',
+  'project.roundKill': 'Round {round} {count} kill(s){hs}',
+
+  // SettingsPage
+  'settings.title': 'Settings',
+  'settings.cs2Install': 'CS2 Installation',
+  'settings.cs2Description': 'CS2 path will be auto-detected from Steam registry. Override manually if needed.',
+  'settings.cs2Placeholder': 'Auto-detected...',
+  'settings.browse': 'Browse',
+  'settings.obsWebSocket': 'OBS WebSocket',
+  'settings.obsDescription': 'Connect to OBS Studio via WebSocket for automated recording.',
+  'settings.host': 'Host',
+  'settings.port': 'Port',
+  'settings.password': 'Password (optional)',
+  'settings.passwordPlaceholder': 'Leave empty if no password',
+  'settings.testConnection': 'Test Connection',
+  'settings.recording': 'Recording',
+  'settings.preRoll': 'Pre-roll padding (seconds before highlight)',
+  'settings.postRoll': 'Post-roll padding (seconds after highlight)',
+  'settings.about': 'About',
+  'settings.version': 'CS2 Demo Cutter v1.0.0',
+  'settings.aboutDescription': 'Automatically detect highlights from CS2 demo files.',
+  'settings.language': 'Language',
+
+  // RecordingPage
+  'recording.title': 'Recording',
+  'recording.description': 'CS2 + OBS recording pipeline will be available in Phase 2.',
+  'recording.subDescription': 'This feature requires CS2 and OBS Studio with WebSocket enabled.',
+
+  // EditorPage
+  'editor.unknownVideo': 'Unknown Video',
+  'editor.videoFailed': 'Failed to open video file',
+  'editor.noVideo': 'No Video Loaded',
+  'editor.importPrompt': 'Import a video file to start editing.',
+  'editor.importVideo': 'Import Video',
+  'editor.backHome': 'Back to Home',
+
+  // ExportPage
+  'export.preparing': 'Preparing export...',
+  'export.failed': 'Export failed',
+  'export.exporting': 'Exporting...',
+  'export.processing': 'Processing...',
+  'export.step': 'Step {current}/{total}',
+  'export.eta': 'ETA: {eta}',
+  'export.cancel': 'Cancel',
+  'export.complete': 'Export Complete',
+  'export.success': 'Video exported successfully',
+  'export.showInExplorer': 'Show in Explorer',
+  'export.exportAgain': 'Export Again',
+  'export.cancelled': 'Export Cancelled',
+  'export.exportFailed': 'Export Failed',
+  'export.tryAgain': 'Try Again',
+  'export.title': 'Export',
+  'export.settings': 'Settings',
+  'export.settingsTitle': 'Export Settings',
+  'export.format': 'Format',
+  'export.videoCodec': 'Video Codec',
+  'export.quality': 'Quality (CRF: {crf})',
+  'export.higherQuality': 'Higher quality',
+  'export.smallerFile': 'Smaller file',
+  'export.resolution': 'Resolution',
+  'export.source': 'Source',
+  'export.audioBitrate': 'Audio Bitrate',
+  'export.clips': 'Clips ({count})',
+  'export.noClips': 'No clips on the timeline. Go to the Editor to add clips.',
+  'export.totalDuration': 'Total duration: ',
+  'export.audioTracks': 'Audio Tracks ({count})',
+  'export.vol': 'Vol: {percent}%',
+  'export.exportVideo': 'Export Video',
+
+  // AudioTrackPanel
+  'editor.audioTracks': 'Audio Tracks',
+  'editor.importAudio': 'Import Audio',
+  'editor.noAudioTracks': 'No audio tracks. Import audio to mix with the video.',
+  'editor.removeAudio': 'Remove',
+
+  // ClipEditor
+  'clipEditor.inButton': 'In [I]',
+  'clipEditor.outButton': 'Out [O]',
+  'clipEditor.frameBack': '-1 frame',
+  'clipEditor.frameForward': '+1 frame',
+  'clipEditor.goToIn': 'Go to in point',
+  'clipEditor.goToOut': 'Go to out point',
+  'clipEditor.preview': 'Preview',
+  'clipEditor.addToTimeline': 'Add to Timeline',
+
+  // Timeline
+  'timeline.noClips': 'No clips on timeline. Use the trim controls above to add clips.',
+  'timeline.title': 'Timeline',
+  'timeline.clipCount': '{count} clip(s) — {duration}',
+  'timeline.clipLabel': 'Clip {index}',
+
+  // ClipInspector
+  'clipInspector.title': 'Clip Properties',
+  'clipInspector.noSelection': 'Select a clip on the timeline to view its properties',
+  'clipInspector.clipLabel': 'Clip {index}',
+  'clipInspector.startPoint': 'Start',
+  'clipInspector.endPoint': 'End',
+  'clipInspector.duration': 'Duration',
+  'clipInspector.volume': 'Volume',
+  'clipInspector.goToStart': 'Go to start',
+  'clipInspector.goToEnd': 'Go to end',
+  'clipInspector.deselect': 'Deselect',
+
+  // Settings persistence
+  'settings.saved': 'Settings saved',
+  'settings.reset': 'Reset Settings',
+  'settings.resetConfirm': 'Are you sure you want to reset all settings to defaults?',
+  'settings.loading': 'Loading settings...',
+  'settings.error': 'Failed to load settings',
+  'settings.retry': 'Retry',
+
+  // Toast notifications
+  'toast.success': 'Success',
+  'toast.error': 'Error',
+  'toast.warning': 'Warning',
+  'toast.info': 'Info',
+
+  // Common
+  'common.clip': 'clip',
+  'common.clips': 'clips',
+  'common.cancel': 'Cancel',
+} as const
+
+export type TranslationKey = keyof typeof en

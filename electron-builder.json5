@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json.schemastore.org/electron-builder.json",
+  "appId": "com.cs2demo.cutter",
+  "productName": "CS2demo_cutter",
+  "directories": {
+    "buildResources": "resources"
+  },
+  "files": [
+    "!**/.vscode/*",
+    "!src/*",
+    "!electron.vite.config.*",
+    "!{.eslintignore,.eslintrc.cjs,.prettierignore,.prettierrc,commitlint.config.cjs,lefthook.yml}",
+    "!.gitkeep",
+    "!tests/*",
+    "!.venv/*",
+    "!*.dem"
+  ],
+  "extraResources": [
+    {
+      "from": "src/python",
+      "to": "python",
+      "filter": ["**/*.py", "**/*.txt"]
+    },
+    {
+      "from": "resources/python-embed",
+      "to": "python-embed",
+      "filter": ["**/*"]
+    }
+  ],
+  "asar": true,
+  "asarUnpack": [
+    "node_modules/ffmpeg-static/**/*"
+  ],
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": ["x64"]
+      }
+    ]
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true
+  }
+}

@@ -1,30 +1,67 @@
-import { useState } from 'react'
+import React from 'react'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { TitleBar } from './components/TitleBar'
+import { SidebarNav } from './components/SidebarNav'
+import { WelcomePage } from './pages/WelcomePage'
+import { ProjectPage } from './pages/ProjectPage'
+import { RecordingPage } from './pages/RecordingPage'
+import { EditorPage } from './pages/EditorPage'
+import { SettingsPage } from './pages/SettingsPage'
+import { ExportPage } from './pages/ExportPage'
+import { ErrorBoundary } from './components/ErrorBoundary'
+import { ToastContainer } from './components/ToastContainer'
+import { useProjectStore } from './stores/useProjectStore'
 
-function App(): JSX.Element {
-  const [count, setCount] = useState(0)
+function AppRoutes(): React.JSX.Element {
+  const { project } = useProjectStore()
 
   return (
-    <div className="container">
-      <div>Electron + Vite + React</div>
-      <div>
-        <a href="https://electron-vite.org" target="_blank" rel="noreferrer">
-          electron-vite
-        </a>
-        +
-        <a href="https://react.dev" target="_blank" rel="noreferrer">
-          React
-        </a>
+    <Routes>
+      <Route path="/" element={<WelcomePage />} />
+      <Route
+        path="/project"
+        element={project ? <ProjectPage /> : <Navigate to="/" replace />}
+      />
+      <Route
+        path="/recording"
+        element={project ? <RecordingPage /> : <Navigate to="/" replace />}
+      />
+      <Route
+        path="/editor"
+        element={project ? <EditorPage /> : <Navigate to="/" replace />}
+      />
+      <Route path="/settings" element={<SettingsPage />} />
+      <Route
+        path="/export"
+        element={project ? <ExportPage /> : <Navigate to="/" replace />}
+      />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  )
+}
+
+function AppContent(): React.JSX.Element {
+  return (
+    <div className="h-screen flex flex-col bg-gray-900 text-white">
+      <TitleBar />
+      <div className="flex flex-1 overflow-hidden">
+        <SidebarNav />
+        <main className="flex-1 overflow-auto">
+          <AppRoutes />
+        </main>
       </div>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>count is {count}</button>
-        <p>
-          Edit <code>src/renderer/src/App.tsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Electron, Vite, React logos to learn more
-      </p>
+      <ToastContainer />
     </div>
+  )
+}
+
+function App(): React.JSX.Element {
+  return (
+    <ErrorBoundary>
+      <BrowserRouter>
+        <AppContent />
+      </BrowserRouter>
+    </ErrorBoundary>
   )
 }
 

@@ -4,6 +4,20 @@ out/
 .venv/
 __pycache__/
 *.pyc
+.pytest_cache/
 *.log
 .DS_Store
 Thumbs.db
+
+# Build artifacts
+*.tsbuildinfo
+
+# Test coverage
+.coverage/
+
+# CS2 demo and video files
+*.dem
+*.mp4
+
+# Crash dumps
+bash.exe.stackdump
