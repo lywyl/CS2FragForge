@@ -1,120 +1,43 @@
 import fs from 'fs/promises'
 import path from 'path'
 
-export interface HighlightSegment {
-  id: string
-  playerName: string
-  tickStart: number
-  tickEnd: number
-  round: number
-  type: string
-}
-
-export interface CombinedCfgConfig {
-  highlights: HighlightSegment[]
-  tickRate: number
-  preRoll: number
-  postRoll: number
-  hostFramerate?: number // default 30
+export interface LaunchCfgConfig {
+  demoStem: string
+  fpsMax?: number
 }
 
 /**
- * Generate combined CFG content for all highlights in one CS2 session.
+ * Generate the startup CFG executed via +exec on the CS2 command line.
+ *
+ * Contains only essential cvars and playdemo — no demo_gototick or
+ * navigation commands. Per-clip seeking is done via PostMessage injection
+ * after the demo loads, following the Insight Agent approach.
  */
-export function buildCombinedCfgContent(config: CombinedCfgConfig): string {
-  const hostFramerate = config.hostFramerate ?? 30
-  const lines: string[] = []
-
-  // Header
-  lines.push('// CS2FragForge auto-generated combined autoexec.cfg')
-  lines.push(`// Highlights: ${config.highlights.length}`)
-  lines.push('')
-
-  // Global settings
-  lines.push('cl_draw_only_deathnotices 1')
-  lines.push('r_drawviewmodel 0')
-  lines.push(`host_framerate ${hostFramerate}`)
-  lines.push('')
-
-  // Generate highlight blocks
-  for (let i = 0; i < config.highlights.length; i++) {
-    const hl = config.highlights[i]
-    const gotoTick = Math.max(0, hl.tickStart - config.preRoll * config.tickRate)
-    const highlightDurationSec = (hl.tickEnd - hl.tickStart) / config.tickRate
-    const totalDurationSec = config.preRoll + highlightDurationSec + config.postRoll
-    const waitFrames = Math.ceil(totalDurationSec * hostFramerate)
-
-    lines.push(`// Highlight ${i + 1}: ${hl.playerName} - ${hl.type} - Round ${hl.round}`)
-    lines.push(`demo_gototick ${gotoTick}`)
-    lines.push(`spec_player ${hl.playerName}`)
-    lines.push(`wait ${waitFrames}`)
-    lines.push('')
-  }
-
+export function buildLaunchCfgContent(config: LaunchCfgConfig): string {
+  const fpsMax = config.fpsMax ?? 30
+  const lines = [
+    'con_enable 1',
+    'engine_no_focus_sleep 0',
+    'cl_demo_predict 0',
+    `fps_max ${fpsMax}`,
+    'bind "`" "toggleconsole"',
+    `playdemo "${config.demoStem}.dem"`,
+    ''
+  ]
   return lines.join('\n')
 }
 
 /**
- * Write combined CFG to a custom-named file (NOT autoexec.cfg).
- * This avoids the timing issue where autoexec runs before the demo loads.
- * The file is later exec'd via CS2's stdin after the demo is confirmed loaded.
- * Returns the filename only (not full path), used for `exec <filename>` command.
+ * Write the launch CFG file to csgo/cfg/.
+ * Returns the full path to the written file.
  */
-export async function writeCustomCfg(
-  config: CombinedCfgConfig,
+export async function writeLaunchCfg(
+  config: LaunchCfgConfig,
   cfgDir: string,
-  cfgName: string
+  cfgStem: string
 ): Promise<string> {
   await fs.mkdir(cfgDir, { recursive: true })
-  const cfgPath = path.join(cfgDir, cfgName)
-  await fs.writeFile(cfgPath, buildCombinedCfgContent(config), 'utf-8')
+  const cfgPath = path.join(cfgDir, `${cfgStem}.cfg`)
+  await fs.writeFile(cfgPath, buildLaunchCfgContent(config), 'utf-8')
   return cfgPath
-}
-
-/**
- * Write combined CFG for all highlights to autoexec.cfg.
- * Backs up existing autoexec.cfg if present.
- * Returns path to written file.
- * @deprecated Use writeCustomCfg instead — autoexec runs before demo loads in CS2.
- */
-export async function writeCombinedCfg(
-  config: CombinedCfgConfig,
-  cfgDir: string
-): Promise<string> {
-  const autoexecPath = path.join(cfgDir, 'autoexec.cfg')
-
-  // Backup existing autoexec.cfg if present
-  try {
-    await fs.access(autoexecPath)
-    const backupPath = path.join(cfgDir, 'autoexec.cfg.cs2fragforge.bak')
-    await fs.copyFile(autoexecPath, backupPath)
-  } catch {
-    // No existing autoexec.cfg, fine
-  }
-
-  await fs.mkdir(cfgDir, { recursive: true })
-  await fs.writeFile(autoexecPath, buildCombinedCfgContent(config), 'utf-8')
-
-  return autoexecPath
-}
-
-/**
- * Restore the original autoexec.cfg from backup if it exists.
- */
-export async function restoreAutoexecCfg(cfgDir: string): Promise<void> {
-  const autoexecPath = path.join(cfgDir, 'autoexec.cfg')
-  const backupPath = path.join(cfgDir, 'autoexec.cfg.cs2fragforge.bak')
-
-  try {
-    await fs.access(backupPath)
-    await fs.copyFile(backupPath, autoexecPath)
-    await fs.unlink(backupPath)
-  } catch {
-    // No backup, just remove our autoexec
-    try {
-      await fs.unlink(autoexecPath)
-    } catch {
-      // ignore
-    }
-  }
 }

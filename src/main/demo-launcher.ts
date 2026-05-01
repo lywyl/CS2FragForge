@@ -12,71 +12,81 @@ export class DemoLauncher {
     this.cs2Path = cs2Path
   }
 
-  async copyDemoToReplays(demoPath: string): Promise<string> {
-    const replaysPath = CS2PathResolver.getReplaysPath(this.cs2Path)
-    const demoName = path.basename(demoPath)
-    const destPath = path.join(replaysPath, demoName)
+  /**
+   * Copy demo to CS2's game/csgo/ directory (Source 2 requirement).
+   * Uses a UUID-prefixed name to avoid collision and to match the CFG file stem.
+   * Returns the stem (filename without .dem) used for both the CFG file and playdemo command.
+   */
+  async copyDemoToCsgo(demoPath: string, stem: string): Promise<string> {
+    const csgoPath = CS2PathResolver.getCsgoPath(this.cs2Path)
+    const destName = `${stem}.dem`
+    const destPath = path.join(csgoPath, destName)
 
     await fs.copyFile(demoPath, destPath)
-    return demoName
+    return stem
   }
 
   /**
-   * Launch CS2 bare-bones (no playdemo on command line).
-   * All commands (playdemo, exec CFG) are injected via sendCommand() after
-   * the engine initializes, since Source 2 may not handle +commands reliably.
+   * Launch CS2 with -console and +exec to run a startup CFG that handles
+   * playdemo automatically. Steam environment variables are set so CS2
+   * does not hang at the main menu when launched outside the Steam client.
    *
-   * Uses windowed mode at 720p to avoid display mode switches and speed up startup.
-   * -nobreakpad disables crash reporting overhead.
+   * Source 2 uses Dear ImGui for the console and does NOT read from stdin,
+   * so all initial commands must go through +exec on the command line.
    */
-  async launch(): Promise<void> {
+  async launch(cfgStem: string, resolution?: { width: number; height: number }): Promise<void> {
     this.killExistingCS2()
 
     const cs2ExePath = CS2PathResolver.getCS2ExePath(this.cs2Path)
+    const gameDir = path.join(this.cs2Path, 'game')
 
     const args = [
-      '-steam',
+      '-console',
       '-novid',
       '-nojoy',
       '-nosound',
-      '-perfectworld',
+      '-worldwide',
       '-windowed',
-      '-w', '1280',
-      '-h', '720',
-      '-nobreakpad'
+      '-w', String(resolution?.width ?? 1280),
+      '-h', String(resolution?.height ?? 720),
+      '-nobreakpad',
+      '-allow_third_party_software',
+      '+engine_no_focus_sleep', '0',
+      '+cl_demo_predict', '0',
+      '+exec', cfgStem
     ]
 
+    const childEnv = { ...process.env, SteamAppId: '730', SteamGameId: '730' }
+
     this.cs2Process = spawn(cs2ExePath, args, {
+      cwd: gameDir,
       detached: false,
       windowsHide: false,
-      stdio: ['pipe', 'ignore', 'ignore']
+      stdio: ['ignore', 'ignore', 'pipe'],
+      env: childEnv
     })
+
+    if (this.cs2Process.stderr) {
+      let stderrBuf = ''
+      this.cs2Process.stderr.on('data', (chunk: Buffer) => {
+        stderrBuf += chunk.toString()
+      })
+      this.cs2Process.on('close', () => {
+        if (stderrBuf.trim()) {
+          console.error('[DemoLauncher] CS2 stderr:', stderrBuf.trim().slice(0, 500))
+        }
+      })
+    }
 
     this.cs2Process.on('error', (err) => {
       console.error('[DemoLauncher] CS2 process error:', err.message)
     })
 
-    this.cs2Process.on('exit', (code) => {
-      console.log(`[DemoLauncher] CS2 exited with code ${code}`)
+    this.cs2Process.on('exit', (code, signal) => {
+      console.log(`[DemoLauncher] CS2 exited with code=${code} signal=${signal}`)
       this.cs2Process = null
       this.onExitCallback?.(code)
     })
-  }
-
-  /**
-   * Send a console command to the running CS2 process via stdin.
-   * Acts as a safety fallback if +exec doesn't fire after playdemo.
-   */
-  sendCommand(command: string): void {
-    if (!this.cs2Process || !this.cs2Process.stdin) {
-      console.warn('[DemoLauncher] Cannot send command: CS2 process not running or stdin not available')
-      return
-    }
-    try {
-      this.cs2Process.stdin.write(command + '\n')
-    } catch (err) {
-      console.warn('[DemoLauncher] Failed to write to CS2 stdin:', err)
-    }
   }
 
   onExit(callback: (code: number | null) => void): void {

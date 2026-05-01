@@ -100,6 +100,7 @@ export class CS2PathResolver {
   private static readonly CS2_SUBDIRS = ['steamapps', 'common']
   private static readonly CS2_EXE_SUBPATH = ['game', 'bin', 'win64', 'cs2.exe']
   private static readonly REPLAYS_SUBPATH = ['game', 'csgo', 'replays']
+  private static readonly CSGO_SUBPATH = ['game', 'csgo']
   private static readonly CONSOLE_LOG_SUBPATH = ['game', 'csgo', 'console.log']
 
   /**
@@ -142,6 +143,14 @@ export class CS2PathResolver {
       fs.mkdirSync(replaysPath, { recursive: true })
     }
     return replaysPath
+  }
+
+  static getCsgoPath(cs2Path: string): string {
+    const csgoPath = path.join(cs2Path, ...this.CSGO_SUBPATH)
+    if (!fs.existsSync(csgoPath)) {
+      fs.mkdirSync(csgoPath, { recursive: true })
+    }
+    return csgoPath
   }
 
   static getConsoleLogPath(cs2Path: string): string {
