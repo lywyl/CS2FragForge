@@ -2,10 +2,10 @@ import path from 'path'
 import fs from 'fs/promises'
 import crypto from 'crypto'
 import { DemoLauncher } from './demo-launcher'
-import { ConsoleLogWatcher } from './console-log-watcher'
 import { OBSService } from './obs-service'
-import { writeLaunchCfg } from './cfg-writer'
-import { injectTimedSequence } from './win-console-inject'
+import { writeLaunchCfg, writeGsiCfg } from './cfg-writer'
+import { startGsiServer, stopGsiServer, resetGsiReady, waitForGsiReady } from './gsi-ready'
+import { injectTimedSequence, findCs2Window } from './win-console-inject'
 import { splitVideo, cleanupObsRecording } from './video-post-processor'
 import { getFfmpegPath } from './ffmpeg'
 import type {
@@ -17,8 +17,9 @@ import type {
   HighlightRecordingStatus
 } from '../shared/recording-types'
 
-const CS2_READY_TIMEOUT_MS = 120_000
-const DEMO_LOAD_TIMEOUT_MS = 60_000
+const GSI_READY_TIMEOUT_MS = 30_000
+const WINDOW_DETECT_TIMEOUT_MS = 30_000
+const DEMO_SETTLE_MS = 8_000
 const OBS_SCENE_NAME = 'CS2FragForge'
 const OBS_SOURCE_NAME = 'CS2 Game Capture'
 const BUFFER_SEC = 5
@@ -31,9 +32,9 @@ export class RecordingOrchestrator {
   private isCancelled = false
   private obsService: OBSService | null = null
   private demoLauncher: DemoLauncher | null = null
-  private consoleWatcher: ConsoleLogWatcher | null = null
   private cfgDir: string | null = null
   private launchCfgPath: string | null = null
+  private gsiCfgPath: string | null = null
   private copiedDemoPath: string | null = null
   private obsRecordingActive = false
   private cleanedUp = false
@@ -72,7 +73,7 @@ export class RecordingOrchestrator {
       }
       if (this.isCancelled) return this.cancelResult(clips, request.highlights.length)
 
-      // ─── Step 3: Prepare demo + launch CFG ────────────────────────
+      // ─── Step 3: Prepare demo + launch CFG + GSI CFG ─────────────
       this.reportProgress('preparing', 12, 0, request.highlights.length, 'preparing', 'Preparing demo...')
       this.demoLauncher = new DemoLauncher(request.cs2Path)
       this.cfgDir = path.join(request.cs2Path, 'game', 'csgo', 'cfg')
@@ -81,6 +82,14 @@ export class RecordingOrchestrator {
 
       await this.demoLauncher.copyDemoToCsgo(request.demoPath, stem)
       this.copiedDemoPath = path.join(request.cs2Path, 'game', 'csgo', `${stem}.dem`)
+
+      // Start GSI server and write GSI config
+      const gsiPort = await startGsiServer()
+      const gsiUri = `http://127.0.0.1:${gsiPort}`
+      resetGsiReady()
+
+      this.gsiCfgPath = await writeGsiCfg(this.cfgDir, stem, gsiUri)
+      console.log(`[Orchestrator] GSI config written, URI: ${gsiUri}`)
 
       this.launchCfgPath = await writeLaunchCfg(
         { demoStem: stem, fpsMax: 30 },
@@ -93,6 +102,7 @@ export class RecordingOrchestrator {
 
       // ─── Step 4: Launch CS2 ───────────────────────────────────────
       this.reportProgress('launching-cs2', 15, 0, request.highlights.length, 'launching', 'Launching CS2...')
+      const launchTime = Date.now()
       try {
         await this.demoLauncher.launch(stem)
       } catch (err) {
@@ -101,22 +111,28 @@ export class RecordingOrchestrator {
       }
       if (this.isCancelled) return this.cancelResult(clips, request.highlights.length)
 
-      // ─── Step 5: Wait for CS2 ready ───────────────────────────────
+      // ─── Step 5: Wait for GSI to confirm CS2 is in-game ──────────
       this.reportProgress('waiting-load', 20, 0, request.highlights.length, 'loading', 'Waiting for CS2 to start...')
-      const readyResult = await this.waitForCs2Ready(request.cs2Path)
-      if (readyResult.timedOut) {
-        console.warn('[Orchestrator] CS2 ready timed out — proceeding anyway')
+      console.log(`[Orchestrator] Waiting for GSI ready (timeout ${GSI_READY_TIMEOUT_MS / 1000}s)...`)
+      const gsiOk = await waitForGsiReady(GSI_READY_TIMEOUT_MS)
+      if (!gsiOk) {
+        console.warn('[Orchestrator] GSI ready timed out — falling back to window detection')
+        const windowFound = await this.waitForCs2Window()
+        if (!windowFound) {
+          console.warn('[Orchestrator] CS2 window not found — proceeding anyway')
+        }
+      } else {
+        const elapsed = ((Date.now() - launchTime) / 1000).toFixed(1)
+        console.log(`[Orchestrator] GSI confirmed in-game after ${elapsed}s`)
       }
       if (this.isCancelled) return this.cancelResult(clips, request.highlights.length)
 
-      // ─── Step 6: Wait for demo load ──────────────────────────────
-      this.reportProgress('loading-demo', 25, 0, request.highlights.length, 'loading', 'Waiting for demo to load...')
-      const loadResult = await this.waitForDemoLoad(request.cs2Path)
-      if (loadResult.timedOut) {
-        console.warn('[Orchestrator] Demo load timed out — proceeding anyway')
-      }
-      // Extra wait for CS2 demo UI to fully stabilize (engine keyframe buffering)
-      await sleep(5000)
+      // ─── Step 6: Wait for demo to stabilize ──────────────────────
+      // Insight Agent: 8s after GSI ready. We use 8s.
+      this.reportProgress('loading-demo', 25, 0, request.highlights.length, 'loading',
+        `Waiting ${DEMO_SETTLE_MS / 1000}s for demo to stabilize...`)
+      console.log(`[Orchestrator] Waiting ${DEMO_SETTLE_MS / 1000}s for demo to settle...`)
+      await sleep(DEMO_SETTLE_MS)
       if (this.isCancelled) return this.cancelResult(clips, request.highlights.length)
 
       // ─── Step 7: Pause demo at load point ─────────────────────────
@@ -137,7 +153,7 @@ export class RecordingOrchestrator {
       }
       const recordingStart = Date.now()
 
-      // ─── Step 9: Per-clip seek + record loop ──────────────────────
+      // ─── Step 9: Per-clip seek + record loop (Insight Agent pattern) ──
       const timestamps: Array<{ id: string; startSec: number; durationSec: number; outputName: string }> = []
 
       for (let i = 0; i < request.highlights.length; i++) {
@@ -155,25 +171,23 @@ export class RecordingOrchestrator {
           i, request.highlights.length, 'recording',
           `Recording ${i + 1}/${request.highlights.length}: ${hl.playerName} - ${hl.type}`)
 
-        // ── Per-clip injection, Insight Agent pattern ──
-        // Stage 1: pause + gototick + wait 3.5s + resume (all in ONE batch, console stays open)
+        // Per-clip injection sequence (Insight Agent pattern):
+        //   1. demo_pause → gototick → wait for keyframe seek
+        //   2. demo_resume → wait for playback to start
+        //   3. spec_mode 5 → spec_player → wait for camera switch
+        // Delays happen inside PowerShell, non-blocking to Node.
         console.log(`[Orchestrator] Clip ${i + 1}: seeking to tick ${gotoTick} (${hl.playerName})`)
         const seekOk = await injectTimedSequence([
           { cmd: 'demo_pause', delay: 100 },
-          { cmd: 'demo_timescale 1', delay: 100 },
           { cmd: `demo_gototick ${gotoTick}`, delay: 3500 },
-          { cmd: 'demo_resume', delay: 500 },
+          { cmd: 'demo_resume', delay: 800 },
+          { cmd: 'spec_mode 5', delay: 200 },
+          { cmd: `spec_player ${hl.playerName}`, delay: 600 },
         ])
-        if (!seekOk) console.warn(`[Orchestrator] Seek injection may have failed for clip ${i + 1}`)
+        if (!seekOk) console.warn(`[Orchestrator] Injection may have failed for clip ${i + 1}`)
 
-        // Clip start = moment demo_resume takes effect (~after 3.5s gototick delay)
+        // Clip start = after full seek+spec sequence settles
         const clipStartOffset = (Date.now() - recordingStart) / 1000
-
-        // Stage 2: spec_mode + spec_player (separate call so it doesn't interfere with seek timing)
-        await injectTimedSequence([
-          { cmd: 'spec_mode 5', delay: 0 },
-          { cmd: `spec_player ${hl.playerName}`, delay: 400 },
-        ])
 
         // Record timestamp for FFmpeg split
         timestamps.push({
@@ -252,8 +266,8 @@ export class RecordingOrchestrator {
   cancel(): void {
     this.isCancelled = true
     this.stopObsSafe()
+    stopGsiServer()
     this.demoLauncher?.terminate()
-    this.consoleWatcher?.stop()
   }
 
   // ─── private helpers ──────────────────────────────────────────────
@@ -276,54 +290,40 @@ export class RecordingOrchestrator {
     }
   }
 
-  private async waitForCs2Ready(cs2Path: string): Promise<{ timedOut: boolean }> {
-    return new Promise((resolve) => {
-      const logPath = path.join(cs2Path, 'game', 'csgo', 'console.log')
-      let resolved = false
-      const t0 = Date.now()
-      const watcher = new ConsoleLogWatcher(logPath, (event) => {
-        if (event.type === 'cs2-ready' && !resolved) {
-          resolved = true; watcher.stop()
-          console.log(`[Orchestrator] CS2 ready after ${((Date.now() - t0) / 1000).toFixed(1)}s`)
-          resolve({ timedOut: false })
-        }
-      })
-      this.consoleWatcher = watcher
-      watcher.start()
-      setTimeout(() => {
-        if (!resolved) { resolved = true; watcher.stop(); console.warn('[Orchestrator] CS2 ready timed out'); resolve({ timedOut: true }) }
-      }, CS2_READY_TIMEOUT_MS)
-    })
-  }
+  /**
+   * Poll for CS2 window appearance using the same EnumWindows approach
+   * as the injection scripts. Returns true when found within timeout.
+   */
+  private async waitForCs2Window(): Promise<boolean> {
+    const deadline = Date.now() + WINDOW_DETECT_TIMEOUT_MS
+    let found = false
+    const t0 = Date.now()
 
-  private async waitForDemoLoad(cs2Path: string): Promise<{ timedOut: boolean }> {
-    return new Promise((resolve) => {
-      const logPath = path.join(cs2Path, 'game', 'csgo', 'console.log')
-      let resolved = false
-      const t0 = Date.now()
-      const watcher = new ConsoleLogWatcher(logPath, (event) => {
-        if (event.type === 'demo-loaded' && !resolved) {
-          resolved = true; watcher.stop()
-          console.log(`[Orchestrator] Demo loaded after ${((Date.now() - t0) / 1000).toFixed(1)}s`)
-          resolve({ timedOut: false })
-        }
-      })
-      this.consoleWatcher = watcher
-      watcher.start()
-      setTimeout(() => {
-        if (!resolved) { resolved = true; watcher.stop(); console.warn('[Orchestrator] Demo load timed out'); resolve({ timedOut: true }) }
-      }, DEMO_LOAD_TIMEOUT_MS)
-    })
+    while (Date.now() < deadline && !this.isCancelled) {
+      found = await findCs2Window()
+      if (found) {
+        const elapsed = ((Date.now() - t0) / 1000).toFixed(1)
+        console.log(`[Orchestrator] CS2 window found after ${elapsed}s`)
+        return true
+      }
+      await sleep(500)
+    }
+
+    console.warn(`[Orchestrator] CS2 window not found after ${WINDOW_DETECT_TIMEOUT_MS / 1000}s`)
+    return false
   }
 
   private async cleanup(): Promise<void> {
     if (this.cleanedUp) return
     this.cleanedUp = true
     await this.stopObsSafe()
+    stopGsiServer()
     try { await this.demoLauncher?.terminate() } catch { /* ignore */ }
-    try { await this.consoleWatcher?.stop() } catch { /* ignore */ }
     if (this.launchCfgPath) {
       try { await fs.unlink(this.launchCfgPath) } catch { /* ignore */ }
+    }
+    if (this.gsiCfgPath) {
+      try { await fs.unlink(this.gsiCfgPath) } catch { /* ignore */ }
     }
     if (this.copiedDemoPath) {
       try { await fs.unlink(this.copiedDemoPath) } catch { /* ignore */ }

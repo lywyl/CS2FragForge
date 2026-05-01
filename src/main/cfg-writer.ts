@@ -41,3 +41,40 @@ export async function writeLaunchCfg(
   await fs.writeFile(cfgPath, buildLaunchCfgContent(config), 'utf-8')
   return cfgPath
 }
+
+/**
+ * Write the Game State Integration config file to csgo/cfg/.
+ * CS2 reads this on launch and starts sending HTTP POST payloads to the URI.
+ * Returns the full path to the written file.
+ */
+export async function writeGsiCfg(
+  cfgDir: string,
+  cfgStem: string,
+  gsiUri: string
+): Promise<string> {
+  await fs.mkdir(cfgDir, { recursive: true })
+  const cfgPath = path.join(cfgDir, `gamestate_integration_${cfgStem}.cfg`)
+  const content = [
+    '"CS2FragForge"',
+    '{',
+    `  "uri" "${gsiUri}"`,
+    '  "timeout" "1.0"',
+    '  "buffer" "0.1"',
+    '  "throttle" "0.1"',
+    '  "heartbeat" "1.0"',
+    '  "data"',
+    '  {',
+    '    "provider" "1"',
+    '    "map" "1"',
+    '    "round" "1"',
+    '    "player_id" "1"',
+    '    "player_state" "1"',
+    '    "allplayers_id" "1"',
+    '    "phase_countdowns" "1"',
+    '  }',
+    '}',
+    ''
+  ].join('\n')
+  await fs.writeFile(cfgPath, content, 'utf-8')
+  return cfgPath
+}
