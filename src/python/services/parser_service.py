@@ -1,6 +1,30 @@
 from demoparser2 import DemoParser
 from typing import Dict, Any, List, Tuple, Optional
 import pandas as pd
+import os
+
+
+def _spec_player_id_offset(observed_user_ids: Optional[List[int]] = None) -> int:
+    """
+    将 parse_ticks 的原始 user_id 转换为 console spec_player 实际槽位。
+
+    0-based user_id (含0) → +1 变为 1-based。
+    2..11 / 3..12 范围 → +1 与常见控制台槽位对齐。
+    可通过 CS2_SPEC_PLAYER_SLOT_OFFSET 环境变量覆盖。
+    """
+    raw_env = os.environ.get("CS2_SPEC_PLAYER_SLOT_OFFSET")
+    if raw_env is not None:
+        try:
+            return max(0, int(float(raw_env.strip())))
+        except (ValueError, TypeError):
+            pass
+    if observed_user_ids:
+        vals = [int(v) for v in observed_user_ids if int(v) >= 0]
+        if vals and min(vals) == 0:
+            return 1
+        if vals and min(vals) >= 2 and max(vals) >= 11:
+            return 1
+    return 0
 
 
 class ParserService:
@@ -40,6 +64,7 @@ class ParserService:
                 "team_name",
                 "name",
                 "steamid",
+                "user_id",
             ]
         if other_props is None:
             other_props = ["total_rounds_played", "game_time", "is_warmup_period"]
@@ -101,6 +126,121 @@ class ParserService:
         # Default to 64 (most common for CS2 matchmaking)
         self._tick_rate = 64
         return self._tick_rate
+
+    def compute_spec_player_slot(self, player_name: str, tick: int) -> Optional[int]:
+        """
+        为控制台 spec_player 命令计算正确的槽位编号。
+
+        优先使用 parse_ticks 的 user_id（非 player_death 的 attacker_user_id）
+        并应用偏移量。parse_ticks 的 user_id 是 CS2 客户端的内部观战编号，
+        而 player_death 事件中的 user_*_id 是另一套编号体系，不能混用。
+        """
+        raw = str(player_name or "").strip()
+        if not raw:
+            return None
+        target_l = raw.lower()
+        tick_i = max(1, int(tick))
+
+        try:
+            df = self.parser.parse_ticks(
+                ["user_id", "name", "steamid", "team_num"],
+                ticks=[tick_i],
+            )
+        except Exception:
+            return None
+
+        if df.empty or "user_id" not in df.columns or "name" not in df.columns:
+            return None
+
+        observed: list[int] = []
+        uid: Optional[int] = None
+        for _, row in df.iterrows():
+            nm = str(row.get("name") or "").strip()
+            u_val = row.get("user_id")
+            u = int(u_val) if u_val is not None and not pd.isna(u_val) else None
+            if u is not None and u >= 0:
+                observed.append(u)
+                if nm.lower() == target_l:
+                    uid = u
+
+        if uid is None:
+            return None
+        offset = _spec_player_id_offset(observed)
+        return uid + offset
+
+    def build_spec_slot_map(self, tick: int) -> Dict[str, int]:
+        """
+        构建玩家名(小写) -> spec_player 槽位的映射。
+
+        在指定 tick 快照上使用 parse_ticks 获取所有玩家的 user_id
+        并应用偏移量，返回可直接用于 spec_player 的槽位编号表。
+        """
+        tick_i = max(1, int(tick))
+        try:
+            df = self.parser.parse_ticks(
+                ["user_id", "name"],
+                ticks=[tick_i],
+            )
+        except Exception:
+            return {}
+
+        if df.empty or "user_id" not in df.columns or "name" not in df.columns:
+            return {}
+
+        observed: list[int] = []
+        name_to_uid: Dict[str, int] = {}
+        for _, row in df.iterrows():
+            nm = str(row.get("name") or "").strip()
+            u_val = row.get("user_id")
+            u = int(u_val) if u_val is not None and not pd.isna(u_val) else None
+            if nm and u is not None and u >= 0:
+                observed.append(u)
+                name_to_uid[nm.lower()] = u
+
+        offset = _spec_player_id_offset(observed)
+        if offset:
+            return {name: uid + offset for name, uid in name_to_uid.items()}
+        return name_to_uid
+
+    def get_kill_ticks(self, player_steamid: int, round_num: int) -> List[int]:
+        """
+        获取指定玩家在指定回合的击杀 tick 列表（升序）。
+
+        从 player_death 事件中提取该玩家作为 attacker 且 non-warmup 的死亡事件，
+        返回击杀发生的 tick 列表，用于智能跳跃录制。
+        """
+        try:
+            de = self.parser.parse_events(
+                ["player_death"],
+                player=["steamid"],
+                other=["total_rounds_played", "is_warmup_period"],
+            )
+            death_df = dict(de).get("player_death")
+        except Exception:
+            return []
+
+        if death_df is None or death_df.empty:
+            return []
+
+        ticks: List[int] = []
+        sid_str = str(player_steamid)
+        target_trp = max(0, int(round_num) - 1)  # total_rounds_played = round - 1
+
+        for _, row in death_df.iterrows():
+            attacker_sid = row.get("attacker_steamid")
+            if str(attacker_sid) != sid_str:
+                continue
+            trp = int(row.get("total_rounds_played", -1))
+            if trp != target_trp:
+                continue
+            warmup = row.get("is_warmup_period")
+            if warmup is True:
+                continue
+            tick = row.get("tick")
+            if tick is not None:
+                ticks.append(int(tick))
+
+        return sorted(ticks)
 
     def tick_to_seconds(self, tick: int) -> float:
         return tick / self.get_tick_rate()

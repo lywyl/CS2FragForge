@@ -68,11 +68,14 @@ export const RecordingPage: React.FC = () => {
     const highlights: RecordingHighlight[] = selectedHighlights.map((h) => ({
       id: h.id,
       playerName: h.playerName,
+      playerSteamId: h.playerSteamId,
+      playerUserId: h.playerUserId,
       tickStart: h.tickStart,
       tickEnd: h.tickEnd,
       round: h.round,
       type: h.type,
-      score: h.score
+      score: h.score,
+      killTicks: h.killTicks
     }))
 
     const tickRate = project.gameInfo?.tickRate ?? 64

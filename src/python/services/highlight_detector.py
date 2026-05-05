@@ -3,12 +3,33 @@ from src.python.models import HighlightResult
 
 
 class HighlightDetector:
-    def __init__(self, events: Dict[str, List[Dict[str, Any]]], tick_rate: int = 64):
+    def __init__(
+        self,
+        events: Dict[str, List[Dict[str, Any]]],
+        tick_rate: int = 64,
+        spec_slot_map: Optional[Dict[str, int]] = None,
+    ):
         self.events = events
         self.tick_rate = tick_rate
+        # 玩家名(小写) -> spec_player 控制台槽位，来自 parse_ticks + offset
+        self.spec_slot_map = spec_slot_map or {}
         self._deaths: Optional[List[Dict[str, Any]]] = None
         self._round_ends: Optional[List[Dict[str, Any]]] = None
         self._round_starts: Optional[List[Dict[str, Any]]] = None
+
+    def _get_spec_slot(self, player_name: str, fallback_userid: int) -> int:
+        """
+        获取 spec_player 命令所用的槽位编号。
+
+        优先使用 parse_ticks 构建的 spec_slot_map，
+        回退到传入的 fallback_userid (来自 player_death 事件，可能偏移 1)。
+        """
+        if self.spec_slot_map:
+            slot = self.spec_slot_map.get(str(player_name or "").strip().lower())
+            if slot is not None:
+                return slot
+        # fallback：player_death 的 user_id 通常需要 +1 偏移
+        return max(0, int(fallback_userid))
 
     @property
     def deaths(self) -> List[Dict[str, Any]]:
@@ -158,6 +179,7 @@ class HighlightDetector:
 
             # Sort kills by tick
             kills_sorted = sorted(kills, key=lambda k: k.get("tick", 0))
+            kill_ticks = [int(k.get("tick", 0)) for k in kills_sorted]
             tick_start = int(kills_sorted[0].get("tick", 0))
             tick_end = int(kills_sorted[-1].get("tick", 0))
 
@@ -168,18 +190,22 @@ class HighlightDetector:
             tick_end = tick_end + padding_end
 
             attacker_name = kills_sorted[0].get("attacker_name", "Unknown")
+            attacker_userid = int(kills_sorted[0].get("attacker_user_id", 0))
+            spec_slot = self._get_spec_slot(attacker_name, attacker_userid)
 
             highlights.append(
                 HighlightResult(
                     type=hl_type,
                     player_name=str(attacker_name),
                     player_steamid=int(attacker_steamid),
+                    player_userid=spec_slot,
                     round=round_num,
                     tick_start=tick_start,
                     tick_end=tick_end,
                     kill_count=kill_count,
                     weapons=list(weapons),
                     score=score,
+                    kill_ticks=kill_ticks,
                 )
             )
 
@@ -289,21 +315,30 @@ class HighlightDetector:
                 continue
             clutch_steamid = survivor_steamid[0]
 
-            # Find survivor name from deaths
+            # Find survivor name and userid from deaths
             clutch_name = "Unknown"
+            clutch_userid = 0
             for death in deaths:
                 if str(death.get("attacker_steamid", "")) == clutch_steamid:
                     clutch_name = death.get("attacker_name", "Unknown")
+                    clutch_userid = int(death.get("attacker_user_id", 0))
                     break
                 if str(death.get("user_steamid", "")) == clutch_steamid:
                     clutch_name = death.get("user_name", "Unknown")
+                    clutch_userid = int(death.get("user_user_id", 0))
                     break
 
-            # Count actual kills by clutch player in this round
-            clutch_kills = sum(
-                1 for d in deaths
-                if str(d.get("attacker_steamid", "")) == clutch_steamid
-            )
+            spec_slot = self._get_spec_slot(clutch_name, clutch_userid)
+
+            # Count actual kills by clutch player in this round, and collect kill ticks
+            clutch_kills = 0
+            clutch_kill_ticks: List[int] = []
+            for d in deaths:
+                if str(d.get("attacker_steamid", "")) == clutch_steamid:
+                    clutch_kills += 1
+                    t = d.get("tick")
+                    if t is not None:
+                        clutch_kill_ticks.append(int(t))
 
             # Get tick range for the round
             round_start_tick = min(d.get("tick", 0) for d in deaths)
@@ -322,12 +357,14 @@ class HighlightDetector:
                     type=hl_type,
                     player_name=clutch_name,
                     player_steamid=int(clutch_steamid),
+                    player_userid=spec_slot,
                     round=round_num,
                     tick_start=tick_start,
                     tick_end=tick_end,
                     kill_count=clutch_kills,
-                    weapons=[],  # Could be filled by analyzing deaths where survivor is attacker
+                    weapons=[],
                     score=round(score, 3),
+                    kill_ticks=sorted(clutch_kill_ticks) if clutch_kill_ticks else None,
                 )
             )
 
@@ -402,6 +439,8 @@ class HighlightDetector:
 
                 player_name = rep_death.get("attacker_name") or rep_death.get("user_name", "Unknown")
                 player_steamid = rep_death.get("attacker_steamid") or rep_death.get("user_steamid", 0)
+                fallback_uid = int(rep_death.get("attacker_user_id") or rep_death.get("user_user_id", 0))
+                player_userid = self._get_spec_slot(player_name, fallback_uid)
 
                 round_start_tick = min(d.get("tick", 0) for d in deaths)
                 round_end_tick = self._get_round_end_tick(round_num)
@@ -413,6 +452,7 @@ class HighlightDetector:
                         type="ECO_WIN",
                         player_name=str(player_name),
                         player_steamid=int(player_steamid) if player_steamid else 0,
+                        player_userid=int(player_userid) if player_userid else 0,
                         round=round_num,
                         tick_start=max(0, int(round_start_tick) - 5 * self.tick_rate),
                         tick_end=int(round_end_tick) + 5 * self.tick_rate,

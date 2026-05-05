@@ -1,9 +1,9 @@
 # CS2 Demo Cutter — 开发计划与进度追踪
 
 > **生成日期**: 2026-04-29
-> **最后更新**: 2026-05-01
-> **版本**: v2.3
-> **状态**: 开发中 — OBS WebSocket v5 录制管线完成, 104 tests, 待 E2E 手动测试
+> **最后更新**: 2026-05-05
+> **版本**: v2.4
+> **状态**: 开发中 — OBS WebSocket v5 录制管线完成, 88 tests, 待 E2E 手动测试
 
 ---
 
@@ -15,7 +15,7 @@
 | 当前阶段 | Phase 2.5 ✅ (OBS WebSocket完成), Phase 4 ✅, Phase 5.2 ✅, Phase 5.3 ✅, CI/CD ✅ |
 | 核心功能 | Demo解析 + Highlights检测 + **OBS WebSocket 录制** + 前端UI + FFmpeg导出管线 + 音频混合 + 中英切换 + 设置持久化 + Toast通知 |
 | 可打包性 | ⚠️ extraResources已配置, embed Python需构建 |
-| 测试覆盖 | Python 24 tests (85% cov) + JS 104 tests 全部通过 |
+| 测试覆盖 | Python 24 tests (85% cov) + JS 88 tests 全部通过 |
 | UI完成度 | ~95% (全页面功能完成，含录制页，仅剩 AI 评分可选功能) |
 
 **下一步**：
@@ -344,6 +344,10 @@ Phase 5 (打包&打磨)
 | FFmpeg concat 音画不同步 | 低 | 中 | 统一输出参数，使用 `-async 1` + `-fflags +genpts` ✅ 已实现 | Phase 4 |
 | FFmpeg 导出卡 0% | 已修复 | 高 | ffprobe-static 安装+模块导入修复+watchdog 60s超时+timemark回退 ✅ 已修复 | Phase 4 |
 | i18n 翻译遗漏 | 低 | 低 | 所有 114 个字符串已提取到字典 ✅ 已完成 | i18n |
+| JS 模板字面量转义问题 | 已发生 | 高 | `\v` 等控制字符需双重转义 `\\v` ✅ 已修复 | Phase 2 |
+| spec_player 需要 user_id 而非 Steam ID | 已发生 | 高 | 从 demoparser2 提取 user_id + GSI slot 校准 ✅ 已修复 | Phase 2 |
+| CS2 不响应 SIGTERM | 已发生 | 中 | 注入 `quit` 控制台命令 + taskkill 后备 ✅ 已修复 | Phase 2 |
+| OBS 陈旧录制阻止新录制 | 已发生 | 中 | GetRecordStatus 预检 + 自动停止 ✅ 已修复 | Phase 2.5 |
 
 ---
 
@@ -399,13 +403,20 @@ Phase 5 (打包&打磨)
 | Bugfix | RecordingPage缺少obsConfig | ✅ 完成 | 2026-05-01 | 2026-05-01 | 添加obsConfig从settings读取到RecordingRequest |
 | Bugfix | Orchestrator cancel资源泄漏 | ✅ 完成 | 2026-05-01 | 2026-05-01 | cancel()停止OBS, cancelResult()调用cleanup, finally统一清理, 幂等cleanup |
 | Bugfix | orchestrator测试修复 | ✅ 完成 | 2026-05-01 | 2026-05-01 | fs/promises mock添加default导出, 测试推进fake timers |
+| Phase 2 | GSI + Console 注入重构 | ✅ 完成 | 2026-05-05 | 2026-05-05 | GSI 就绪检测 + PowerShell PostMessage 注入 + spec_player slot 校准 |
+| Bugfix | PS1 路径转义修复 | ✅ 完成 | 2026-05-05 | 2026-05-05 | `\v` → `\\v` 修复垂直制表符转义问题 |
+| Bugfix | CS2 分辨率修复 | ✅ 完成 | 2026-05-05 | 2026-05-05 | 1280x720 windowed → 1920x1080 fullscreen |
+| Bugfix | OBS 陈旧录制预检 | ✅ 完成 | 2026-05-05 | 2026-05-05 | GetRecordStatus + 停止已有录制 |
+| Bugfix | spec_player user_id | ✅ 完成 | 2026-05-05 | 2026-05-05 | 从 demoparser2 提取 user_id + GSI slot 校准 + 全栈传递 |
+| Bugfix | CS2 退出修复 | ✅ 完成 | 2026-05-05 | 2026-05-05 | 注入 `quit` 控制台命令 + taskkill 后备 |
+| Bugfix | 校准跳到开头修复 | ✅ 完成 | 2026-05-05 | 2026-05-05 | 移除 tick 0 seek，直接读取当前 GSI 数据 |
 | Phase 6 | AI & 高级功能 | ⬜ 待开始 | - | - | 可选，P2 |
 
 ---
 
 ## 七、下一步行动
 
-OBS WebSocket v5 录制管线已全部完成。推荐优先级：
+GSI + Console 注入录制管线已完成。推荐优先级：
 
 | 优先级 | 任务 | 预计工时 | 前置条件 | 说明 |
 |--------|------|----------|----------|------|
@@ -415,10 +426,11 @@ OBS WebSocket v5 录制管线已全部完成。推荐优先级：
 **开发者提示**：
 - **录制使用 OBS WebSocket v5**（需安装 OBS Studio + 启用 WebSocket 服务器）
 - OBS 配置在 Settings 页：填写 host/port/password → 测试连接
-- 录制流程：OBS 连接 → 自动场景配置 → CS2 启动一次 → OBS 连续录制 → FFmpeg 切割 → 独立片段
-- OBS 自动配置：创建 "CS2FragForge" 场景 + Game Capture 源（foreground_window 模式）
-- 用户需在 OBS 中设置输出路径（设置 → 输出 → 录制 → 录像路径）
-- cancel 流程：停止 OBS 录制 → 断开 OBS → 终止 CS2 → 恢复 autoexec.cfg（全部由 finally 块保证）
+- 录制流程：OBS 连接 → 场景配置 → CS2 启动(1920x1080 全屏) → GSI 就绪 → 每个 highlight 注入 seek+spec_player → OBS 连续录制 → FFmpeg 切割
+- **spec_player** 需要 engine user_id（小数字），不是 64 位 Steam ID。优先级：GSI calibrated slot → demo parser user_id → 跳过
+- **Console 注入**：PowerShell + C# (PostMessage WM_CHAR) 绕过 UIPI，VK_OEM3 打开控制台
+- **GSI 配置**：需要 `allplayers_id` + `allplayers_state` 获取 observer_slot 数据
+- cancel 流程：停止 OBS 录制 → 断开 OBS → 注入 `quit` 终止 CS2 → 清理临时文件
 - 新增 i18n 字符串时，同时更新 `en.ts` 和 `zh.ts`（目前 140+ 条）
 - Python 依赖安装：`python -m venv .venv && .venv/Scripts/pip install -r src/python/requirements.txt`
 - 拖放文件使用 `webUtils.getPathForFile()`（Electron 33 不再支持 `File.path`）

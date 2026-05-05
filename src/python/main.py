@@ -28,7 +28,11 @@ def detect_highlights(req: ParseDemoRequest) -> List[HighlightResult]:
     try:
         service = ParserService(req.demo_path)
         events = service.parse_events()
-        detector = HighlightDetector(events, tick_rate=service.get_tick_rate())
+        # 构建 spec_slot_map：从 parse_ticks (非 player_death) 获取 user_id + offset
+        # 这是 CS2 控制台 spec_player 命令所需的正确槽位编号
+        tick_rate = service.get_tick_rate()
+        spec_slot_map = service.build_spec_slot_map(tick=max(1, tick_rate))
+        detector = HighlightDetector(events, tick_rate=tick_rate, spec_slot_map=spec_slot_map)
         results = detector.detect_highlights()
         return [HighlightResult(**r.model_dump() if hasattr(r, 'model_dump') else r) for r in results]
     except Exception as e:

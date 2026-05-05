@@ -211,8 +211,8 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText($csPath, $csharp, $utf8NoBom)
 
 # Find csc.exe (.NET Framework 4.x)
-$netDir = Join-Path $env:SystemRoot "Microsoft.NET\Framework64\v4.0.30319"
-if (!(Test-Path $netDir)) { $netDir = Join-Path $env:SystemRoot "Microsoft.NET\Framework\v4.0.30319" }
+$netDir = Join-Path $env:SystemRoot "Microsoft.NET\\Framework64\\v4.0.30319"
+if (!(Test-Path $netDir)) { $netDir = Join-Path $env:SystemRoot "Microsoft.NET\\Framework\\v4.0.30319" }
 $csc = Join-Path $netDir "csc.exe"
 $dllPath = Join-Path $env:TEMP "cs2fragforge_inject.dll"
 
@@ -347,8 +347,8 @@ public static class CS2Simple {
 $csPath = Join-Path $env:TEMP "cs2fragforge_simple.cs"
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText($csPath, $csharp, $utf8NoBom)
-$netDir = Join-Path $env:SystemRoot "Microsoft.NET\Framework64\v4.0.30319"
-if (!(Test-Path $netDir)) { $netDir = Join-Path $env:SystemRoot "Microsoft.NET\Framework\v4.0.30319" }
+$netDir = Join-Path $env:SystemRoot "Microsoft.NET\\Framework64\\v4.0.30319"
+if (!(Test-Path $netDir)) { $netDir = Join-Path $env:SystemRoot "Microsoft.NET\\Framework\\v4.0.30319" }
 $csc = Join-Path $netDir "csc.exe"
 $dllPath = Join-Path $env:TEMP "cs2fragforge_simple.dll"
 & $csc /nologo /target:library /out:$dllPath /utf8output $csPath 2>&1 | Out-Null

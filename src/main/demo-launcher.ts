@@ -1,7 +1,8 @@
-import { spawn, ChildProcess, execSync } from 'child_process'
+import { spawn, ChildProcess, execSync, exec } from 'child_process'
 import fs from 'fs/promises'
 import path from 'path'
 import { CS2PathResolver } from './cs2-path-resolver'
+import { injectSingleCommand, findCs2Window } from './win-console-inject'
 
 export class DemoLauncher {
   private cs2Process: ChildProcess | null = null
@@ -46,9 +47,9 @@ export class DemoLauncher {
       '-nojoy',
       '-nosound',
       '-worldwide',
-      '-windowed',
-      '-w', String(resolution?.width ?? 1280),
-      '-h', String(resolution?.height ?? 720),
+      '-fullscreen',
+      '-w', String(resolution?.width ?? 1920),
+      '-h', String(resolution?.height ?? 1080),
       '-nobreakpad',
       '-allow_third_party_software',
       '+engine_no_focus_sleep', '0',
@@ -98,34 +99,44 @@ export class DemoLauncher {
   }
 
   async terminate(): Promise<void> {
-    if (!this.cs2Process) return
-
-    return new Promise<void>((resolve) => {
-      const proc = this.cs2Process!
-      const timeout = setTimeout(() => {
-        try {
-          proc.kill('SIGKILL')
-        } catch {
-          // process already dead
-        }
-        this.cs2Process = null
-        resolve()
-      }, 5000)
-
-      proc.on('exit', () => {
-        clearTimeout(timeout)
-        this.cs2Process = null
-        resolve()
-      })
-
-      try {
-        proc.kill('SIGTERM')
-      } catch {
-        clearTimeout(timeout)
-        this.cs2Process = null
-        resolve()
+    // Prefer graceful quit via console; fall back to process-tree kill.
+    // Insight Agent pattern: try quit first (console still responsive right after
+    // recording), then taskkill /F /T /PID for the process tree, then /IM cs2.exe
+    // as last resort, with window-disappearance polling between each step.
+    try {
+      const ok = await injectSingleCommand('quit')
+      if (ok) {
+        await new Promise(r => setTimeout(r, 3000))
       }
-    })
+    } catch {
+      // injection failed — fall through to process kill
+    }
+
+    // Kill process tree by PID (handles Steam launcher subprocesses)
+    if (this.cs2Process && this.cs2Process.pid) {
+      try {
+        execSync(`taskkill /F /T /PID ${this.cs2Process.pid}`, {
+          windowsHide: true, stdio: 'ignore', timeout: 10000
+        })
+      } catch { /* already dead */ }
+
+      // Poll until CS2 window is gone
+      const deadline = Date.now() + 8000
+      while (Date.now() < deadline) {
+        const found = await findCs2Window()
+        if (!found) break
+        await new Promise(r => setTimeout(r, 200))
+      }
+    }
+
+    // Last resort: kill any remaining cs2.exe instances
+    try {
+      execSync('taskkill /F /IM cs2.exe', {
+        windowsHide: true, stdio: 'ignore', timeout: 10000
+      })
+    } catch { /* not running */ }
+
+    this.cs2Process = null
   }
 
   private killExistingCS2(): void {

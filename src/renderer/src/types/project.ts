@@ -5,6 +5,7 @@ export interface Highlight {
   type: HighlightType
   playerName: string
   playerSteamId: number
+  playerUserId: number
   round: number
   tickStart: number
   tickEnd: number
@@ -12,6 +13,7 @@ export interface Highlight {
   weapons: string[]
   score: number
   headshotCount?: number
+  killTicks?: number[]  // 每次击杀的 tick
   selected?: boolean
 }
 

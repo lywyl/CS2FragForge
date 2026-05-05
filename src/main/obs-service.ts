@@ -95,6 +95,18 @@ export class OBSService {
     this.assertConnected()
 
     try {
+      // Stop any stale recording first to avoid "output already active" errors
+      const status = await this.obs.call('GetRecordStatus')
+      if (status.outputActive) {
+        console.warn('[OBS] Stale recording active — stopping before restart')
+        await this.obs.call('StopRecord')
+        await new Promise((r) => setTimeout(r, 500))
+      }
+    } catch {
+      // GetRecordStatus may fail if OBS is in a weird state; proceed anyway
+    }
+
+    try {
       await this.obs.call('StartRecord')
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)

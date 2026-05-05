@@ -38,6 +38,7 @@ export const WelcomePage: React.FC = () => {
           type: h.type as string,
           playerName: h.player_name as string,
           playerSteamId: h.player_steamid as number,
+          playerUserId: h.player_userid as number,
           round: h.round as number,
           tickStart: h.tick_start as number,
           tickEnd: h.tick_end as number,

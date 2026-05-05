@@ -1,8 +1,8 @@
 # CS2demo_cutter — 当前开发状态
 
-**最后更新**: 2026-04-30
-**版本**: v2.4
-**状态**: 开发中 — OBS WebSocket 录制方案已完成，待 E2E 手动测试
+**最后更新**: 2026-05-05
+**版本**: v2.5
+**状态**: 开发中 — GSI + console 注入方案完成，待 E2E 手动测试
 
 ## 快速开始（给新开发者）
 
@@ -49,15 +49,16 @@ npm run dev        # 启动 Electron + Vite 开发服务器
 - 24 pytest tests, 85% coverage
 - 用真实 demo 验证：检测到 13 个 highlights
 
-### Phase 2: CS2 录制管线 ✅ (完成 — OBS WebSocket v5 方案)
-- `RecordingOrchestrator`: 录制编排器（OBS 连接 → 场景配置 → CS2 单次启动 → 连续录制 → FFmpeg 切割 → finally 清理）
-- `OBSService`: OBS WebSocket v5 服务（连接/断开、场景管理、Game Capture 自动创建、录制控制、连接测试）
-- `CfgWriter`: 组合 autoexec.cfg 生成器（多 highlight + wait 命令序列，单次会话录制所有高光）
-- `DemoLauncher`: CS2 进程管理（复制 demo、启动/+exec CFG、stdin 命令注入后备、终止）
-- `ConsoleLogWatcher`: console.log 轮询监听（检测 demo 加载状态，45s 超时 fallback）
+### Phase 2: CS2 录制管线 ✅ (完成 — OBS WebSocket v5 + GSI + Console 注入方案)
+- `RecordingOrchestrator`: 录制编排器（OBS 连接 → 场景配置 → CS2 单次启动 → GSI 就绪检测 → 连续录制 → FFmpeg 切割 → finally 清理）
+- `OBSService`: OBS WebSocket v5 服务（连接/断开、场景管理、Game Capture 自动创建、录制控制、连接测试、陈旧录制预检）
+- `CfgWriter`: 启动 CFG + GSI CFG 生成器（playdemo + GSI allplayers 数据请求）
+- `DemoLauncher`: CS2 进程管理（复制 demo、1920x1080 全屏启动、`quit` 控制台命令退出 + taskkill 后备）
+- `gsi-ready`: CS2 Game State Integration 服务（本地 HTTP 接收 GSI 心跳、就绪检测、allplayers slot 校准）
+- `win-console-inject`: PowerShell + C# 控制台注入（PostMessage WM_CHAR 绕过 UIPI、VK_OEM3 打开控制台、批量命令序列）
 - `VideoPostProcessor`: FFmpeg 按时间戳切割 OBS 录制文件为独立片段 + 清理
-- ~~录制方案：`startmovie h264`~~ → **已废弃**，CS2 不执行 CFG 脚本
-- **新方案：OBS WebSocket v5** — CS2 启动一次，OBS 连续录制，FFmpeg 按时间戳切割
+- **录制方案**：CS2 启动一次 → GSI 确认就绪 → 每个 highlight 通过 console 注入 seek + spec_player → OBS 连续录制 → FFmpeg 切割
+- **spec_player 校准**：优先 GSI allplayers slot → 备选 demo parser user_id → 跳过（不再发送 64 位 Steam ID）
 - RecordingPage: 完整录制 UI（自动开始、进度条、highlight 状态列表、取消、完成/错误状态）+ 传递 OBS 配置
 - SettingsPage: OBS WebSocket 配置（host/port/password + 测试连接按钮）
 - IPC: RECORDING_START/STOP/PROGRESS + OBS_TEST_CONNECTION 通道 + preload 桥接
@@ -196,9 +197,10 @@ npm run dev        # 启动 Electron + Vite 开发服务器
 | `src/main/export-service.ts` | FFmpeg 导出服务（trim/concat/audio mix/progress/cancel） |
 | `src/main/recording-orchestrator.ts` | 录制编排器（状态机，协调 OBS 录制 + CS2 启动/终止） |
 | `src/main/obs-service.ts` | OBS WebSocket v5 服务（连接/场景管理/Game Capture/录制控制/测试连接） |
-| `src/main/cfg-writer.ts` | CS2 CFG 文件生成（组合 autoexec.cfg：demo_gototick + spec_player + wait 序列） |
-| `src/main/demo-launcher.ts` | CS2 进程管理（复制 demo、启动、终止） |
-| `src/main/console-log-watcher.ts` | CS2 console.log 轮询监听（检测 demo 加载状态） |
+| `src/main/cfg-writer.ts` | CS2 CFG 文件生成（启动 CFG + GSI CFG：playdemo + allplayers 数据请求） |
+| `src/main/demo-launcher.ts` | CS2 进程管理（复制 demo、1920x1080 全屏启动、`quit` 命令退出） |
+| `src/main/gsi-ready.ts` | CS2 GSI 服务（HTTP 心跳接收、就绪检测、allplayers slot 校准） |
+| `src/main/win-console-inject.ts` | PowerShell + C# 控制台注入（PostMessage WM_CHAR、VK_OEM3、批量命令序列） |
 | `src/main/video-post-processor.ts` | FFmpeg 时间戳切割（OBS 录制 → 独立片段）/ 清理 |
 | `src/main/cs2-path-resolver.ts` | Steam 注册表 + CS2 路径发现 + VDF 解析 |
 | `src/main/settings-store.ts` | electron-store 设置持久化（get/set/reset） |
@@ -236,7 +238,7 @@ npm run dev        # 启动 Electron + Vite 开发服务器
 |------|------|
 | `src/shared/ipc.ts` | IPC 通道常量（含导出+录制+项目持久化+设置持久化通道） |
 | `src/shared/export-types.ts` | 导出相关共享类型（ExportSettings/Progress/Request） |
-| `src/shared/recording-types.ts` | 录制相关共享类型（RecordingStatus/Progress/Request/Result） |
+| `src/shared/recording-types.ts` | 录制相关共享类型（RecordingStatus/Progress/Request/Result + RecordingHighlight 含 playerUserId） |
 | `src/shared/settings-types.ts` | 设置相关共享类型（AppSettings/DEFAULT_APP_SETTINGS） |
 | `src/preload/index.ts` | electronAPI 桥接（含导出+录制+项目持久化+设置持久化+文件工具方法） |
 
@@ -252,7 +254,7 @@ npm run dev        # 启动 Electron + Vite 开发服务器
 
 | 类别 | 数量 | 状态 |
 |------|------|------|
-| JS/TS 单元测试 (Vitest) | 104 | ✅ 全部通过 |
+| JS/TS 单元测试 (Vitest) | 88 | ✅ 全部通过 |
 | Python 后端测试 (pytest) | 24 | ✅ 全部通过 |
 | ESLint 检查 | - | ⚠️ 7 pre-existing errors (无关文件) |
 | TypeScript 编译 | - | ✅ 通过 |
@@ -291,6 +293,13 @@ npm run dev        # 启动 Electron + Vite 开发服务器
 | RecordingPage 缺少 obsConfig | 重构时遗漏 obsConfig 字段，录制请求无法传递 OBS 连接参数 | RecordingPage 添加 obsConfig 读取 settings | 2026-05-01 |
 | 录制取消/错误后资源泄漏 | cancelResult() 和 catch 块不调用 cleanup()，OBS/CS2 进程未清理 | 添加 finally 块统一清理 + cancel() 停止 OBS + 幂等 cleanup | 2026-05-01 |
 | orchestrator 测试失败 | fs/promises mock 缺少 default 导出 + 测试未推进 fake timers | 修复 mock + 添加 advanceTimersByTimeAsync | 2026-05-01 |
+| PowerShell 注入路径错误 | `\v` 在 JS 模板字面量中被解释为垂直制表符 (0x0B) | `\\v` 转义为字面量 `\v` | 2026-05-05 |
+| CS2 启动分辨率 1280x720 | demo-launcher.ts 硬编码 `-windowed -w 1280 -h 720` | 改为 `-fullscreen -w 1920 -h 1080` | 2026-05-05 |
+| OBS 不自动录制 | 已有录制会话时 `StartRecord` 抛出 "output already active" | `GetRecordStatus` 预检 + 停止陈旧录制 | 2026-05-05 |
+| spec_player 不切换视角 | 发送 64 位 Steam ID 而非 engine user_id | 添加 `user_id` 到 demoparser2 props + 全栈传递 player_userid | 2026-05-05 |
+| CS2 录制后不退出 | `proc.kill('SIGTERM')` 对 Windows GUI 应用无效 | 注入 `quit` 控制台命令 + taskkill 后备 | 2026-05-05 |
+| 校准跳到 demo 开头 | calibrateSpecSlots seek 到 tick 0 | 移除 seek，直接读取当前 GSI allplayers 数据 | 2026-05-05 |
+| demo 稳定等待太久 | 固定等待 8 秒 | 减少到 2 秒，校准步骤隐式等待 GSI 数据 | 2026-05-05 |
 
 ---
 
@@ -306,10 +315,13 @@ OBS WebSocket 录制管线已全部集成完毕。推荐优先级：
 **开发者提示**：
 - **录制使用 OBS WebSocket v5**（需安装 OBS Studio + 启用 WebSocket 服务器）
 - OBS 配置：Settings → OBS WebSocket → 填写 host/port/password → 测试连接
-- 录制流程：OBS 连接 → 场景配置 → CS2 启动一次 → OBS 连续录制 → FFmpeg 切割→ 独立片段
+- 录制流程：OBS 连接 → 场景配置 → CS2 启动(1920x1080 全屏) → GSI 就绪 → 每个 highlight 注入 seek+spec_player → OBS 连续录制 → FFmpeg 切割
 - OBS 自动配置：应用自动创建 "CS2FragForge" 场景 + Game Capture 源
 - 用户需在 OBS 中设置输出路径（设置 → 输出 → 录制 → 录像路径）
-- cancel 流程：停止 OBS 录制 → 断开 OBS → 终止 CS2 → 恢复 autoexec.cfg
+- cancel 流程：停止 OBS 录制 → 断开 OBS → 注入 `quit` 终止 CS2 → 清理临时文件
+- **spec_player** 需要 engine user_id（小数字），不是 64 位 Steam ID。优先级：GSI calibrated slot → demo parser user_id → 跳过
+- **Console 注入**：PowerShell + C# (PostMessage WM_CHAR) 绕过 UIPI，VK_OEM3 打开控制台
+- **GSI 配置**：需要 `allplayers_id` + `allplayers_state` 获取 observer_slot 数据
 - 新增 i18n 字符串时，同时更新 `en.ts` 和 `zh.ts`（目前 140+ 条）
 - Python 依赖安装：`python -m venv .venv && .venv/Scripts/pip install -r src/python/requirements.txt`
 - 拖放文件使用 `webUtils.getPathForFile()`（Electron 33 不再支持 `File.path`）

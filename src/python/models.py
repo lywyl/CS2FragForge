@@ -10,6 +10,7 @@ class HighlightResult(BaseModel):
     type: str  # "3K", "4K", "ACE", "CLUTCH", "ECO_WIN"
     player_name: str
     player_steamid: int
+    player_userid: int  # engine-internal user_id for spec_player (parse_ticks + offset)
     round: int
     tick_start: int
     tick_end: int
@@ -17,6 +18,7 @@ class HighlightResult(BaseModel):
     weapons: List[str]
     score: float
     headshot_count: Optional[int] = None
+    kill_ticks: Optional[List[int]] = None  # 每次击杀的 tick，用于智能跳跃录制
 
 
 class PlayerInfoResult(BaseModel):

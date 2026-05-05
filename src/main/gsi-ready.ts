@@ -33,6 +33,8 @@ const GSI_CFG_CONTENT = `"CS2FragForge"
 let gsiServer: http.Server | null = null
 let gsiReady = false
 let gsiPort = 0
+let latestPayload: Record<string, unknown> | null = null
+let latestPayloadTimestamp = 0
 
 /**
  * Start a local HTTP server to receive CS2 GSI payloads.
@@ -53,6 +55,8 @@ export function startGsiServer(): Promise<number> {
         req.on('end', () => {
           try {
             const payload = JSON.parse(body)
+            latestPayload = payload
+            latestPayloadTimestamp = Date.now()
             if (isPayloadReady(payload)) {
               gsiReady = true
             }
@@ -91,6 +95,7 @@ export function stopGsiServer(): void {
     gsiServer = null
     gsiReady = false
     gsiPort = 0
+    latestPayload = null
   }
 }
 
@@ -99,6 +104,8 @@ export function stopGsiServer(): void {
  */
 export function resetGsiReady(): void {
   gsiReady = false
+  latestPayload = null
+  latestPayloadTimestamp = 0
 }
 
 /**
@@ -183,4 +190,137 @@ function isPayloadReady(payload: Record<string, unknown>): boolean {
   }
 
   return false
+}
+
+/**
+ * Get the most recent GSI payload received from CS2.
+ */
+export function getLatestGsiPayload(): Record<string, unknown> | null {
+  return latestPayload
+}
+
+/**
+ * Extract the currently spectated player's steamid from the latest GSI payload.
+ * In CS2 GSI, when spectating a player in demo, the `player.steamid` field
+ * reflects the steamid of the player currently being observed.
+ *
+ * Used for active spec slot calibration: iterate slots, read steamid per slot.
+ */
+export function getLatestGsiTimestamp(): number {
+  return latestPayloadTimestamp
+}
+
+export function getCurrentGsiPlayerSteamId(): string | null {
+  if (!latestPayload) return null
+  const player = latestPayload.player as Record<string, unknown> | undefined
+  if (!player) return null
+  const sid = player.steamid
+  return sid ? String(sid) : null
+}
+
+/**
+ * Block until a fresh GSI payload arrives after the given timestamp.
+ * Returns the steamid of the currently spectated player, or null on timeout.
+ */
+export function awaitFreshGsiSteamId(
+  afterTimestamp: number,
+  timeoutMs: number = 2000
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    const deadline = Date.now() + timeoutMs
+    const check = (): void => {
+      // Only use payloads received after the given timestamp (fresh data)
+      if (latestPayloadTimestamp > afterTimestamp && latestPayload) {
+        const player = latestPayload.player as Record<string, unknown> | undefined
+        if (player) {
+          const sid = player.steamid
+          if (sid) {
+            resolve(String(sid))
+            return
+          }
+        }
+      }
+      if (Date.now() >= deadline) {
+        resolve(null)
+        return
+      }
+      setTimeout(check, 100)
+    }
+    check()
+  })
+}
+
+/**
+ * Wait for a GSI payload containing allplayers with observer_slot and steamid.
+ * Returns a Map<steamid_string, observer_slot_number>.
+ *
+ * This is used for spec_player calibration: CS2's spec_player command requires
+ * a numeric slot index, not a player name. The GSI allplayers data maps
+ * steamid -> observer_slot so we can translate player identities to slot numbers.
+ */
+export function awaitGsiAllplayerSlots(timeoutMs: number): Promise<Map<string, number>> {
+  return new Promise((resolve) => {
+    const startTime = Date.now()
+
+    const check = (): void => {
+      const mapping = extractAllplayerSlots(latestPayload)
+      if (mapping.size > 0) {
+        resolve(mapping)
+        return
+      }
+      if (Date.now() - startTime >= timeoutMs) {
+        resolve(new Map())
+        return
+      }
+      setTimeout(check, 200)
+    }
+
+    check()
+  })
+}
+
+/**
+ * Extract steamid -> observer_slot mapping from a GSI payload.
+ *
+ * CS2 GSI allplayers object: keys are slot numbers ("0","1",...),
+ * values contain steamid, name, observer_slot, etc.
+ * We prefer observer_slot field, fall back to the key itself.
+ *
+ * If any observer_slot is 0 (0-based indexing), we add +1 to all slots
+ * so they match the 1-based numbering expected by console spec_player.
+ * This mirrors the Insight Agent's offset logic in _gsi_allplayer_spec_slots.
+ */
+function extractAllplayerSlots(payload: Record<string, unknown> | null): Map<string, number> {
+  const mapping = new Map<string, number>()
+  if (!payload) return mapping
+
+  const allplayers = payload.allplayers as Record<string, Record<string, unknown>> | undefined
+  if (!allplayers) return mapping
+
+  for (const [key, playerData] of Object.entries(allplayers)) {
+    const steamid = String(playerData.steamid ?? '')
+    if (!steamid) continue
+
+    // Prefer observer_slot field, fall back to allplayers key (which IS the slot number)
+    const slot = typeof playerData.observer_slot === 'number'
+      ? playerData.observer_slot
+      : parseInt(key, 10)
+
+    if (!isNaN(slot)) {
+      mapping.set(steamid, slot)
+    }
+  }
+
+  // Offset correction: if any slot is 0-based, shift all to 1-based
+  let needsOffset = false
+  mapping.forEach((slot) => {
+    if (slot === 0) needsOffset = true
+  })
+  if (needsOffset) {
+    mapping.forEach((slot, sid) => {
+      mapping.set(sid, slot + 1)
+    })
+  }
+
+  return mapping
 }

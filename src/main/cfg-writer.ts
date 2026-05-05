@@ -70,6 +70,7 @@ export async function writeGsiCfg(
     '    "player_id" "1"',
     '    "player_state" "1"',
     '    "allplayers_id" "1"',
+    '    "allplayers_state" "1"',
     '    "phase_countdowns" "1"',
     '  }',
     '}',

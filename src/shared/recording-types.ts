@@ -37,11 +37,14 @@ export interface RecordingProgress {
 export interface RecordingHighlight {
   id: string
   playerName: string
+  playerSteamId: number
+  playerUserId: number
   tickStart: number
   tickEnd: number
   round: number
   type: string
   score: number
+  killTicks?: number[]  // 每次击杀的 tick，用于智能跳跃录制 (kill-centric ±3s)
 }
 
 export interface ObsConfig {
