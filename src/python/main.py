@@ -28,12 +28,42 @@ def detect_highlights(req: ParseDemoRequest) -> List[HighlightResult]:
     try:
         service = ParserService(req.demo_path)
         events = service.parse_events()
-        # 构建 spec_slot_map：从 parse_ticks (非 player_death) 获取 user_id + offset
-        # 这是 CS2 控制台 spec_player 命令所需的正确槽位编号
         tick_rate = service.get_tick_rate()
+
+        # Phase 1: rough detection with spec_slot_map at tick_rate (warmup)
         spec_slot_map = service.build_spec_slot_map(tick=max(1, tick_rate))
         detector = HighlightDetector(events, tick_rate=tick_rate, spec_slot_map=spec_slot_map)
         results = detector.detect_highlights()
+
+        # Phase 2: refine spec_player slot per highlight at the actual kill tick.
+        # The slot mapping at tick_rate (warmup) may differ from the in-round
+        # mapping (bots slot-shifting, late-joiners).  We rebuild the map at
+        # each highlight's first-kill tick so spec_player gets the right numeric
+        # slot when the recording seeks there.
+        if results:
+            # Group by tick to minimise parse_ticks calls
+            ticks_to_resolve: dict[int, list[int]] = {}  # tick -> result indices
+            for i, r in enumerate(results):
+                if r.kill_ticks:
+                    ticks_to_resolve.setdefault(r.kill_ticks[0], []).append(i)
+
+            for tick, indices in ticks_to_resolve.items():
+                tick_map = service.build_spec_slot_map(tick=max(1, int(tick)))
+                if not tick_map:
+                    continue
+                for idx in indices:
+                    r = results[idx]
+                    # Refine killer slot
+                    slot = tick_map.get(r.player_name.strip().lower())
+                    if slot is not None and slot > 0:
+                        r.player_userid = slot
+                    # Refine victim slots for POV replay
+                    if r.kill_details:
+                        for kd in r.kill_details:
+                            v_slot = tick_map.get(kd.victim_name.strip().lower())
+                            if v_slot is not None and v_slot > 0:
+                                kd.victim_userid = v_slot
+
         return [HighlightResult(**r.model_dump() if hasattr(r, 'model_dump') else r) for r in results]
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

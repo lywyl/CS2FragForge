@@ -75,7 +75,8 @@ export const RecordingPage: React.FC = () => {
       round: h.round,
       type: h.type,
       score: h.score,
-      killTicks: h.killTicks
+      killTicks: h.killTicks,
+      killDetails: h.killDetails
     }))
 
     const tickRate = project.gameInfo?.tickRate ?? 64

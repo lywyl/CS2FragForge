@@ -1,5 +1,5 @@
 from typing import List, Dict, Any, Optional, Set, Tuple
-from src.python.models import HighlightResult
+from src.python.models import HighlightResult, KillDetail
 
 
 class HighlightDetector:
@@ -180,6 +180,17 @@ class HighlightDetector:
             # Sort kills by tick
             kills_sorted = sorted(kills, key=lambda k: k.get("tick", 0))
             kill_ticks = [int(k.get("tick", 0)) for k in kills_sorted]
+            # Per-kill victim details for POV replay segments
+            kill_details: List[KillDetail] = []
+            for k in kills_sorted:
+                kill_details.append(KillDetail(
+                    tick=int(k.get("tick", 0)),
+                    victim_name=str(k.get("user_name", "")),
+                    victim_steamid=int(k.get("user_steamid", 0)),
+                    victim_userid=int(k.get("user_user_id", 0)),
+                    weapon=str(k.get("weapon", "")),
+                    headshot=bool(k.get("headshot", False)),
+                ))
             tick_start = int(kills_sorted[0].get("tick", 0))
             tick_end = int(kills_sorted[-1].get("tick", 0))
 
@@ -206,6 +217,7 @@ class HighlightDetector:
                     weapons=list(weapons),
                     score=score,
                     kill_ticks=kill_ticks,
+                    kill_details=kill_details,
                 )
             )
 

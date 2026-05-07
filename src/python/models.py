@@ -2,6 +2,16 @@ from pydantic import BaseModel
 from typing import List, Optional
 
 
+class KillDetail(BaseModel):
+    """Per-kill victim info for POV replay segments."""
+    tick: int                          # tick when the kill occurred
+    victim_name: str                   # victim player name
+    victim_steamid: int                # victim SteamID64
+    victim_userid: int = 0             # victim spec_player slot (computed later)
+    weapon: str = ""                   # weapon used
+    headshot: bool = False             # was it a headshot
+
+
 class ParseDemoRequest(BaseModel):
     demo_path: str
 
@@ -19,6 +29,7 @@ class HighlightResult(BaseModel):
     score: float
     headshot_count: Optional[int] = None
     kill_ticks: Optional[List[int]] = None  # 每次击杀的 tick，用于智能跳跃录制
+    kill_details: Optional[List[KillDetail]] = None  # 每次击杀的受害者信息，用于 POV 回放
 
 
 class PlayerInfoResult(BaseModel):

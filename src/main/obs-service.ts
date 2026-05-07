@@ -126,6 +126,28 @@ export class OBSService {
     }
   }
 
+  async pauseRecording(): Promise<void> {
+    this.assertConnected()
+
+    try {
+      await this.obs.call('PauseRecord')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      throw new Error(`Failed to pause recording: ${message}`)
+    }
+  }
+
+  async resumeRecording(): Promise<void> {
+    this.assertConnected()
+
+    try {
+      await this.obs.call('ResumeRecord')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      throw new Error(`Failed to resume recording: ${message}`)
+    }
+  }
+
   async getRecordStatus(): Promise<{ outputActive: boolean; outputPath?: string }> {
     this.assertConnected()
 

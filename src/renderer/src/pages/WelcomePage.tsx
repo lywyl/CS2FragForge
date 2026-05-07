@@ -46,6 +46,15 @@ export const WelcomePage: React.FC = () => {
           weapons: h.weapons as string[],
           score: h.score as number,
           headshotCount: h.headshot_count as number | undefined,
+          killTicks: h.kill_ticks as number[] | undefined,
+          killDetails: (h.kill_details as Array<Record<string, unknown>> | undefined)?.map(kd => ({
+            tick: kd.tick as number,
+            victimName: kd.victim_name as string,
+            victimSteamId: kd.victim_steamid as number,
+            victimUserId: kd.victim_userid as number,
+            weapon: kd.weapon as string,
+            headshot: kd.headshot as boolean,
+          })),
           selected: false
         }))
 

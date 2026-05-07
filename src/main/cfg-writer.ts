@@ -14,7 +14,7 @@ export interface LaunchCfgConfig {
  * after the demo loads, following the Insight Agent approach.
  */
 export function buildLaunchCfgContent(config: LaunchCfgConfig): string {
-  const fpsMax = config.fpsMax ?? 30
+  const fpsMax = config.fpsMax ?? 500
   const lines = [
     'con_enable 1',
     'engine_no_focus_sleep 0',
@@ -71,6 +71,7 @@ export async function writeGsiCfg(
     '    "player_state" "1"',
     '    "allplayers_id" "1"',
     '    "allplayers_state" "1"',
+    '    "allplayers_position" "1"',
     '    "phase_countdowns" "1"',
     '  }',
     '}',

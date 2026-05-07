@@ -45,7 +45,6 @@ export class DemoLauncher {
       '-console',
       '-novid',
       '-nojoy',
-      '-nosound',
       '-worldwide',
       '-fullscreen',
       '-w', String(resolution?.width ?? 1920),

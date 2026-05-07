@@ -5,14 +5,15 @@ Desktop application that automatically identifies highlight moments from CS2 `.d
 ## Features
 
 - **Demo Parsing**: Parse CS2 `.dem` files using demoparser2 ✅
-- **Highlight Detection**: Rule-based detection for multi-kills (3K/4K/5K/ACE), clutch wins (1v2~1v5), eco wins ✅
+- **Highlight Detection**: Rule-based detection for multi-kills (3K/4K/ACE), clutch wins, eco wins ✅
+- **POV Replay Segments**: Automatic victim perspective replays for multi-kill clips ✅
+- **Recording**: Per-clip OBS WebSocket recording (Insight Agent pattern) with POV, config protection, engine burn compensation ✅
 - **Video Editor**: Timeline with trim (In/Out points), frame-step navigation, drag-to-reorder ✅
 - **Audio Mixing**: Import audio tracks, adjust volume, mix with video ✅
 - **Video Export**: FFmpeg pipeline (trim → concat → audio mix) with progress and cancel ✅
-- **i18n**: Chinese/English switching with 114 UI strings ✅
-- **CS2 Integration**: Auto-detect CS2 installation via Steam registry ✅ (recording: Phase 2 - pending)
-- **Recording**: OBS WebSocket integration for automated recording (Phase 2 - pending)
-- **AI Scoring**: Optional OpenAI/Claude integration for highlight ranking (Phase 6 - optional)
+- **i18n**: Chinese/English switching with 140+ UI strings ✅
+- **CS2 Integration**: Auto-detect CS2 installation via Steam registry ✅
+- **User Config Protection**: Snapshot/restore CS2 config files during recording ✅
 
 ## Tech Stack
 

@@ -1,8 +1,8 @@
 # CS2demo_cutter — 当前开发状态
 
 **最后更新**: 2026-05-05
-**版本**: v2.5
-**状态**: 开发中 — GSI + console 注入方案完成，待 E2E 手动测试
+**版本**: v3.1
+**状态**: 开发中 — POV 默认关闭 + 校准范围修复，待 E2E 手动测试
 
 ## 快速开始（给新开发者）
 
@@ -19,13 +19,14 @@ npm run dev        # 启动 Electron + Vite 开发服务器
 
 ### 当前可用功能
 1. **Welcome 页** — 拖放/选择 `.dem` 文件或导入视频
-2. **Project 页** — 自动检测 highlights（3K/4K/ACE/Clutch/Eco）+ 一键录制
-3. **Recording 页** — OBS WebSocket 自动录制（OBS 连接 → 场景配置 → CS2 单次启动 → 连续录制 → FFmpeg 切割）
+2. **Project 页** — 自动检测 highlights（3K/4K/ACE/Clutch/Eco）+ POV 回放数据 + 一键录制
+3. **Recording 页** — Per-clip OBS WebSocket 录制（OBS 连接 → 场景配置 → CS2 启动 → GSI 校准 → Space 预热 → per-clip 独立录制 → POV 回放段）
 4. **Editor 页** — 视频播放 + 裁剪（In/Out 点 + 帧步进）+ 音频轨道导入 + 时间线编辑
 5. **Export 页** — FFmpeg 导出（裁剪 → 合并 → 音频混合），支持取消和进度条
 6. **Settings 页** — 设置持久化（electron-store）+ CS2 路径自动检测 + 受控组件 + 重置默认值 + Toast 通知
 7. **Toast 通知系统** — 全局通知，支持 success/error/warning/info，自动关闭
 8. **CS2 黄色主题** — 全应用 CS2 风格暗色主题（金色/深灰配色方案）
+9. **用户配置保护** — 录制前快照 config.cfg/video.txt，录制后自动恢复
 
 ### 下一步应该做什么
 见下方"待完成阶段"，**推荐优先级**：
@@ -49,21 +50,23 @@ npm run dev        # 启动 Electron + Vite 开发服务器
 - 24 pytest tests, 85% coverage
 - 用真实 demo 验证：检测到 13 个 highlights
 
-### Phase 2: CS2 录制管线 ✅ (完成 — OBS WebSocket v5 + GSI + Console 注入方案)
-- `RecordingOrchestrator`: 录制编排器（OBS 连接 → 场景配置 → CS2 单次启动 → GSI 就绪检测 → 连续录制 → FFmpeg 切割 → finally 清理）
-- `OBSService`: OBS WebSocket v5 服务（连接/断开、场景管理、Game Capture 自动创建、录制控制、连接测试、陈旧录制预检）
-- `CfgWriter`: 启动 CFG + GSI CFG 生成器（playdemo + GSI allplayers 数据请求）
-- `DemoLauncher`: CS2 进程管理（复制 demo、1920x1080 全屏启动、`quit` 控制台命令退出 + taskkill 后备）
-- `gsi-ready`: CS2 Game State Integration 服务（本地 HTTP 接收 GSI 心跳、就绪检测、allplayers slot 校准）
-- `win-console-inject`: PowerShell + C# 控制台注入（PostMessage WM_CHAR 绕过 UIPI、VK_OEM3 打开控制台、批量命令序列）
-- `VideoPostProcessor`: FFmpeg 按时间戳切割 OBS 录制文件为独立片段 + 清理
-- **录制方案**：CS2 启动一次 → GSI 确认就绪 → 每个 highlight 通过 console 注入 seek + spec_player → OBS 连续录制 → FFmpeg 切割
-- **spec_player 校准**：优先 GSI allplayers slot → 备选 demo parser user_id → 跳过（不再发送 64 位 Steam ID）
-- RecordingPage: 完整录制 UI（自动开始、进度条、highlight 状态列表、取消、完成/错误状态）+ 传递 OBS 配置
+### Phase 2: CS2 录制管线 ✅ (v3.0 — Insight Agent 完整移植)
+- `RecordingOrchestrator`: Per-clip OBS 录制编排器（OBS 连接 → 场景配置 → CS2 启动 → GSI 就绪 → **smart 校准** → per-clip StartRecord/StopRecord → POV 回放段 → cleanup）
+- `OBSService`: OBS WebSocket v5 服务（连接/断开、场景管理、Game Capture 自动创建、录制控制、**PauseRecord/ResumeRecord**、连接测试、陈旧录制预检）
+- `cs2-config-backup`: 用户配置保护（录制前快照 config.cfg/video.txt/user_convars_*.vcfg，录制后恢复）
+- `CfgWriter`: 启动 CFG + GSI CFG 生成器（playdemo + GSI allplayers 数据请求，`fps_max 500`）
+- `DemoLauncher`: CS2 进程管理（复制 demo、1920x1080 全屏启动、`quit` 控制台命令退出 + taskkill 后备，**移除 -nosound**）
+- `gsi-ready`: CS2 Game State Integration 服务（本地 HTTP 接收 GSI 心跳、就绪检测、allplayers slot 校准、**fresh steamid 检测**）
+- `win-console-inject`: PowerShell + C# 控制台注入（PostMessage WM_CHAR 绕过 UIPI、VK_OEM3 打开控制台、批量命令序列、**sendSpaceTaps 不打开控制台的 Space 键注入**）
+- **录制方案 (v3.0)**：CS2 启动一次 → GSI 就绪 → smart 校准（seek 到击杀 tick + 限 slot 数 + 提前终止）→ 每 clip 独立 OBS StartRecord/StopRecord → Space 预热 → 单次合并注入（demo_pause → gototick → resume → spec_mode → spec_player → hideconsole）→ POV 回放段（OBS PauseRecord → seek victim → spec → OBS ResumeRecord → replay）
+- **spec_player 校准**: 优先级：GSI calibrated slot（seek 到击杀 tick 校准 + 提前终止）→ Python Phase 2 精炼 slot（在击杀 tick 重建 spec_slot_map）→ player name 回退
+- **POV 回放**: 多杀高光（3K+）自动在 victiim 死亡时刻切换视角，OBS PauseRecord/ResumeRecord 在一个文件内生成干净剪辑点
+- **引擎空转补偿**: 1.5s × tickRate 提前 seek，补偿注入耗时
+- **Session warmup cvar**: 首 clip 注入 cl_draw_only_deathnotices/spec_show_xray/hud_showtargetid/tv_nochat
+- RecordingPage: 完整录制 UI（自动开始、进度条、highlight 状态列表、取消、完成/错误状态）+ 传递 OBS 配置 + killDetails
 - SettingsPage: OBS WebSocket 配置（host/port/password + 测试连接按钮）
 - IPC: RECORDING_START/STOP/PROGRESS + OBS_TEST_CONNECTION 通道 + preload 桥接
 - Store: recordingStatus/recordingProgress/recordingResult 状态管理
-- 39 个新测试（obs-service 22 + orchestrator 17）
 
 ### Phase 5.1: 打包配置修复 ✅
 - `electron-builder.json5`: extraResources 配置打包 Python 源码和 embed
@@ -182,26 +185,26 @@ npm run dev        # 启动 Electron + Vite 开发服务器
 ### 后端 (Python)
 | 文件 | 说明 |
 |------|------|
-| `src/python/main.py` | FastAPI 入口，4 个端点 |
-| `src/python/models.py` | Pydantic 数据模型 |
-| `src/python/services/parser_service.py` | Demo 解析器 |
-| `src/python/services/highlight_detector.py` | Highlights 检测器 |
+| `src/python/main.py` | FastAPI 入口，4 个端点，**Phase 2 精炼 spec slot + victim slot** |
+| `src/python/models.py` | Pydantic 数据模型（含 **KillDetail** POV 数据） |
+| `src/python/services/parser_service.py` | Demo 解析器，**spec_player slot 计算 + 偏移检测** |
+| `src/python/services/highlight_detector.py` | Highlights 检测器，**含 victim 信息收集** |
 | `src/python/requirements.txt` | 运行时依赖 |
 
 ### 主进程 (Electron)
 | 文件 | 说明 |
 |------|------|
-| `src/main/index.ts` | 主进程入口，IPC handlers，Python API 代理，`local-video://` 协议，导出+录制+项目持久化+设置持久化 handler |
+| `src/main/index.ts` | 主进程入口，IPC handlers，Python API 代理 |
 | `src/main/python-bridge.ts` | Python 进程管理，路径解析，健康检查 |
 | `src/main/ffmpeg.ts` | FFmpeg/FFprobe 路径解析 |
 | `src/main/export-service.ts` | FFmpeg 导出服务（trim/concat/audio mix/progress/cancel） |
-| `src/main/recording-orchestrator.ts` | 录制编排器（状态机，协调 OBS 录制 + CS2 启动/终止） |
-| `src/main/obs-service.ts` | OBS WebSocket v5 服务（连接/场景管理/Game Capture/录制控制/测试连接） |
-| `src/main/cfg-writer.ts` | CS2 CFG 文件生成（启动 CFG + GSI CFG：playdemo + allplayers 数据请求） |
-| `src/main/demo-launcher.ts` | CS2 进程管理（复制 demo、1920x1080 全屏启动、`quit` 命令退出） |
-| `src/main/gsi-ready.ts` | CS2 GSI 服务（HTTP 心跳接收、就绪检测、allplayers slot 校准） |
-| `src/main/win-console-inject.ts` | PowerShell + C# 控制台注入（PostMessage WM_CHAR、VK_OEM3、批量命令序列） |
-| `src/main/video-post-processor.ts` | FFmpeg 时间戳切割（OBS 录制 → 独立片段）/ 清理 |
+| `src/main/recording-orchestrator.ts` | **Per-clip 录制编排器**（smart 校准 + 合并注入 + POV 回放 + 引擎空转补偿 + 配置保护） |
+| `src/main/obs-service.ts` | OBS WebSocket v5（+ **PauseRecord/ResumeRecord**） |
+| `src/main/cfg-writer.ts` | CS2 CFG 文件生成（`fps_max 500`） |
+| `src/main/demo-launcher.ts` | CS2 进程管理（**移除 -nosound**） |
+| `src/main/gsi-ready.ts` | CS2 GSI 服务（心跳接收、就绪检测、slot 校准） |
+| `src/main/win-console-inject.ts` | 控制台注入（+ **sendSpaceTaps 不打开控制台**） |
+| `src/main/cs2-config-backup.ts` | **用户配置快照/恢复（config.cfg 等保护）** |
 | `src/main/cs2-path-resolver.ts` | Steam 注册表 + CS2 路径发现 + VDF 解析 |
 | `src/main/settings-store.ts` | electron-store 设置持久化（get/set/reset） |
 
@@ -236,11 +239,18 @@ npm run dev        # 启动 Electron + Vite 开发服务器
 ### 共享 & 预加载
 | 文件 | 说明 |
 |------|------|
-| `src/shared/ipc.ts` | IPC 通道常量（含导出+录制+项目持久化+设置持久化通道） |
-| `src/shared/export-types.ts` | 导出相关共享类型（ExportSettings/Progress/Request） |
-| `src/shared/recording-types.ts` | 录制相关共享类型（RecordingStatus/Progress/Request/Result + RecordingHighlight 含 playerUserId） |
-| `src/shared/settings-types.ts` | 设置相关共享类型（AppSettings/DEFAULT_APP_SETTINGS） |
-| `src/preload/index.ts` | electronAPI 桥接（含导出+录制+项目持久化+设置持久化+文件工具方法） |
+| `src/shared/ipc.ts` | IPC 通道常量 |
+| `src/shared/export-types.ts` | 导出相关共享类型 |
+| `src/shared/recording-types.ts` | 录制类型（+ **KillDetail** + RecordingStatus 补全 loading-demo/preparing-record） |
+| `src/shared/settings-types.ts` | 设置相关共享类型 |
+| `src/preload/index.ts` | electronAPI 桥接 |
+
+### 渲染进程 (React)
+| 文件 | 说明 |
+|------|------|
+| `src/renderer/src/types/project.ts` | TypeScript 类型（+ **KillDetail** for POV） |
+| `src/renderer/src/pages/WelcomePage.tsx` | 拖放 demo（+ **killDetails 映射**） |
+| `src/renderer/src/pages/RecordingPage.tsx` | 录制页（+ **killDetails 传递**） |
 
 ### 配置 & 脚本
 | 文件 | 说明 |
@@ -279,8 +289,31 @@ npm run dev        # 启动 Electron + Vite 开发服务器
 
 ### 已知待修复
 - 视频播放区域仍偏大，用户希望进一步缩小（延后处理）
+- POV 回放段切回杀手视角有时序问题，已默认关闭 (POV_ENABLED=false)
+- Smart jump-cut（>12s 击杀间隔分段录制）未实现
+- 批量多 demo 录制未实现
 
-### 已修复 Bug 记录
+### 已修复 Bug 记录 (v3.1 新增)
+
+| Bug | 根因 | 修复方式 | 日期 |
+|------|------|----------|------|
+| 镜头显示被击杀玩家而非杀手 | POV 回放段在受害者视角后未正确切回；校准扫 slot 太少找不到玩家 | 禁用 POV (POV_ENABLED=false)；校准扫 min(10, playerCount+2) slot | 2026-05-05 |
+
+### 已修复 Bug 记录 (v3.0)
+| Bug | 根因 | 修复方式 | 日期 |
+|------|------|----------|------|
+| 视角不切换到击杀者 | 两阶段 PowerShell 注入间有 1-3s 延迟（进程重启+C#重编译），demo 在此间隙以错误视角播放 | 合并为单次 PowerShell 调用（零 gap）+ 增加 SPEC_SETTLE/RESUME/POST_HIDE 延迟 | 2026-05-05 |
+| demo_pause 翻转 (toggle) | demo_pause 是翻转命令非强制暂停，已暂停时再次注入会取消暂停 | 状态机重设计：校准结束不放 pause，clip 间隙不放 pause，确保每次 toggle 作用于正确状态 | 2026-05-05 |
+| 引擎空转导致录制晚到 | 注入耗时（resume + spec + hideconsole）在 demo 播放中消耗时间 | 添加 ENGINE_BURN_SEC=1.5s 补偿，提前 seek | 2026-05-05 |
+| 校准慢且扫满 16 slot | tick ~0 无 seek + 盲扫所有 slot | seek 到击杀 tick + 限 playerCount+2 slot + 提前终止 | 2026-05-05 |
+| spec slot 在热身阶段不准 | Python spec_slot_map 在固定 tick 64 构建 | Phase 2 精炼：每个高光在首杀 tick 重建 spec_slot_map | 2026-05-05 |
+| 无 POV 回放段 | 缺少 kill_details 数据 + OBS 无 PauseRecord/ResumeRecord | Python 端收集 victim 信息 + OBS Pause/Resume + orchestrator POV 段循环 | 2026-05-05 |
+| 无用户配置保护 | CS2 可能将 fps_max/hud 等 cvar 持久化到用户 config.cfg | cs2-config-backup.ts: 录制前快照 + 录制后恢复 | 2026-05-05 |
+| -nosound 导致无游戏音频 | CS2 启动参数包含 -nosound | 移除 -nosound 标志 | 2026-05-05 |
+| fps_max 30 太卡 | 默认 30 FPS 限制 | 改为 500 | 2026-05-05 |
+| RecordingStatus 类型不完整 | loading-demo/preparing-record 不在类型定义中 | 补全 RecordingStatus 联合类型 | 2026-05-05 |
+
+### 已修复 Bug 记录 (历史)
 | Bug | 根因 | 修复方式 | 日期 |
 |------|------|----------|------|
 | 导出卡 0% 不动 | `ffprobe-static` 未安装 + 模块导入格式错误 | `npm install ffprobe-static` + 修复 `require()` 类型转换 | 2026-04-30 |
@@ -303,25 +336,58 @@ npm run dev        # 启动 Electron + Vite 开发服务器
 
 ---
 
-## 七、下一步行动
+## 七、最终实现效果
 
-OBS WebSocket 录制管线已全部集成完毕。推荐优先级：
+### 录制流程（v3.1）
 
-| 优先级 | 任务 | 预计工时 | 前置条件 | 说明 |
-|--------|------|----------|----------|------|
-| **P0** | E2E 手动测试 | 0.5d | CS2 + demo + OBS Studio | 验证完整录制流程：demo → highlights → OBS 录制 → FFmpeg 切割 → MP4 |
-| **P2** | Phase 6 AI 评分 (可选) | 2d | 无 | OpenAI/Claude API 集成 |
+选中 N 个高光 → 点击 Record：
 
-**开发者提示**：
-- **录制使用 OBS WebSocket v5**（需安装 OBS Studio + 启用 WebSocket 服务器）
-- OBS 配置：Settings → OBS WebSocket → 填写 host/port/password → 测试连接
-- 录制流程：OBS 连接 → 场景配置 → CS2 启动(1920x1080 全屏) → GSI 就绪 → 每个 highlight 注入 seek+spec_player → OBS 连续录制 → FFmpeg 切割
-- OBS 自动配置：应用自动创建 "CS2FragForge" 场景 + Game Capture 源
-- 用户需在 OBS 中设置输出路径（设置 → 输出 → 录制 → 录像路径）
-- cancel 流程：停止 OBS 录制 → 断开 OBS → 注入 `quit` 终止 CS2 → 清理临时文件
-- **spec_player** 需要 engine user_id（小数字），不是 64 位 Steam ID。优先级：GSI calibrated slot → demo parser user_id → 跳过
-- **Console 注入**：PowerShell + C# (PostMessage WM_CHAR) 绕过 UIPI，VK_OEM3 打开控制台
-- **GSI 配置**：需要 `allplayers_id` + `allplayers_state` 获取 observer_slot 数据
-- 新增 i18n 字符串时，同时更新 `en.ts` 和 `zh.ts`（目前 140+ 条）
-- Python 依赖安装：`python -m venv .venv && .venv/Scripts/pip install -r src/python/requirements.txt`
-- 拖放文件使用 `webUtils.getPathForFile()`（Electron 33 不再支持 `File.path`）
+```
+1. OBS 连接 + 场景配置
+2. Demo 复制 + CFG 写入 + GSI 启动
+3. 用户配置快照 (config.cfg / video.txt)
+4. CS2 启动 (1920x1080, fps_max 500, 有声音)
+5. GSI 就绪检测 → 8s 稳定
+6. 校准: seek 到击杀 tick → 扫 min(10, playerCount+2) slot → 找到所有高光玩家
+7. ┌─ 每 clip ──────────────────────────────────────────┐
+   │ Space 预热 → 合并注入(单次PS,零间隙):
+   │   [首clip: warmup cvar] → demo_pause → gototick
+   │   → demo_resume → spec_mode 5 → spec_player <slot>
+   │   → hideconsole
+   │ → OBS StartRecord → 等待(~12s, 镜头锁定杀手)
+   │ → OBS StopRecord → rename → clips/<name>_<type>_R<round>_<id>.mp4
+   └─────────────────────────────────────────────────────┘
+8. 最后 clip 后: 注入 quit → CS2 退出
+9. 恢复用户配置 → 删除临时文件 → OBS 断开
+```
+
+### 核心特性
+
+| 特性 | 状态 |
+|------|------|
+| Per-clip 独立录制 (无 FFmpeg 切割) | ✅ |
+| 镜头全程锁定高光玩家 (不跳受害者) | ✅ POV_ENABLED=false |
+| 单次合并注入 (demo_pause→gototick→resume→spec→hideconsole) | ✅ |
+| 引擎空转补偿 (1.5s × tickRate) | ✅ |
+| Smart 校准 (seek 到击杀 tick + min 10 slot + 提前终止) | ✅ |
+| Python Phase 2 精炼 (击杀 tick 重建 spec_slot_map) | ✅ |
+| Session warmup cvar (首 clip: deathnotices/xray/targetid/nochat) | ✅ |
+| 用户配置保护 (快照 + 恢复) | ✅ |
+| 游戏音频 (移除 -nosound) | ✅ |
+| fps_max 500 | ✅ |
+| Space 预热 (demo UI priming, 不打开控制台) | ✅ |
+| POV 回放段 (代码保留, 默认关闭) | ⏸️ |
+
+### 与 Insight Agent 对照
+
+| 特性 | 对齐 |
+|------|:---:|
+| _prepare_clip_playback: seek + spec + hideconsole 时序 | ✅ |
+| _execute_single_clip_recording: per-clip StartRecord/StopRecord | ✅ |
+| build_smart_jump_segments: 击杀间隔分段 | ❌ |
+| POV victim segments | ⏸️ |
+| cs2_config_backup: 用户配置保护 | ✅ |
+| _recording_warmup_console_lines: session cvar | ✅ |
+| send_cs2_space_taps: Space 预热 | ✅ |
+| _calibrate_spec_players_for_demo: GSI 校准 | ✅ |
+| ENGINE_BURN compensation | ✅ |

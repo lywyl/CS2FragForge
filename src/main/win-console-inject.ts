@@ -463,12 +463,13 @@ export async function injectSingleCommand(cmd: string): Promise<boolean> {
 }
 
 export function cleanupInjectScript(): void {
-  for (const p of [mainScriptPath, simpleScriptPath, findScriptPath]) {
+  for (const p of [mainScriptPath, simpleScriptPath, findScriptPath, spaceTapScriptPath]) {
     if (p) { try { fs.unlinkSync(p) } catch { /* ignore */ } }
   }
   mainScriptPath = null
   simpleScriptPath = null
   findScriptPath = null
+  spaceTapScriptPath = null
 }
 
 const PS_FIND_SCRIPT = `
@@ -520,6 +521,121 @@ export async function findCs2Window(): Promise<boolean> {
     )
     return result.trim() === 'FOUND'
   } catch {
+    return false
+  }
+}
+
+const PS_SPACE_TAPS = `
+$csharp = @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public static class CS2SpaceTap {
+    const uint WM_KEYDOWN = 0x0100, WM_KEYUP = 0x0101;
+    const int VK_SPACE = 0x20;
+    const int SCAN_SPACE = 0x39;
+    const int INPUT_KEYBOARD = 1, KEYEVENTF_KEYUP = 0x0002;
+
+    [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindowsProc e, IntPtr l);
+    delegate bool EnumWindowsProc(IntPtr h, IntPtr l);
+    [DllImport("user32.dll")] static extern int GetWindowTextLength(IntPtr h);
+    [DllImport("user32.dll")] static extern int GetWindowText(IntPtr h, StringBuilder s, int m);
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll")] static extern uint SendInput(uint n, INPUT[] p, int cb);
+    [DllImport("user32.dll")] static extern IntPtr PostMessage(IntPtr h, uint M, int w, int l);
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+
+    [StructLayout(LayoutKind.Sequential)] struct KEYBDINPUT {
+        public ushort wVk, wScan; public uint dwFlags, time; public IntPtr dwExtraInfo;
+    }
+    [StructLayout(LayoutKind.Explicit)] struct INPUT_UNION { [FieldOffset(0)] public KEYBDINPUT ki; }
+    [StructLayout(LayoutKind.Sequential)] struct INPUT { public uint type; public INPUT_UNION u; }
+
+    static IntPtr _h;
+
+    static bool P(IntPtr h, IntPtr l) {
+        if (!IsWindowVisible(h)) return true;
+        int n = GetWindowTextLength(h); if (n==0) return true;
+        StringBuilder s = new StringBuilder(n+1); GetWindowText(h,s,s.Capacity);
+        if (s.ToString().Contains("Counter-Strike") && !s.ToString().ToLower().Contains("obs"))
+        { _h=h; return false; }
+        return true;
+    }
+
+    static bool Tap() {
+        if (GetForegroundWindow() == _h) {
+            var down = new INPUT {
+                type = INPUT_KEYBOARD,
+                u = new INPUT_UNION { ki = new KEYBDINPUT { wVk = VK_SPACE, wScan = SCAN_SPACE } }
+            };
+            var up = new INPUT {
+                type = INPUT_KEYBOARD,
+                u = new INPUT_UNION { ki = new KEYBDINPUT { wVk = VK_SPACE, wScan = SCAN_SPACE, dwFlags = KEYEVENTF_KEYUP } }
+            };
+            return SendInput(1, new[] { down }, Marshal.SizeOf(typeof(INPUT))) == 1
+                && SendInput(1, new[] { up }, Marshal.SizeOf(typeof(INPUT))) == 1;
+        } else {
+            int down = (SCAN_SPACE << 16) | 1;
+            int up = (1 << 31) | (1 << 30) | (SCAN_SPACE << 16) | 1;
+            PostMessage(_h, WM_KEYDOWN, VK_SPACE, down);
+            System.Threading.Thread.Sleep(40);
+            PostMessage(_h, WM_KEYUP, VK_SPACE, up);
+            return true;
+        }
+    }
+
+    public static bool SendTaps(int count) {
+        _h = IntPtr.Zero;
+        EnumWindows(P, IntPtr.Zero);
+        if (_h == IntPtr.Zero) return false;
+        for (int i = 0; i < count; i++) {
+            Tap();
+            System.Threading.Thread.Sleep(60);
+        }
+        return true;
+    }
+}
+'@
+Add-Type -TypeDefinition $csharp
+$count = [int]$args[0]
+$ok = [CS2SpaceTap]::SendTaps($count)
+if ($ok) { Write-Output "OK" } else { Write-Output "WINDOW_NOT_FOUND" }
+`
+
+let spaceTapScriptPath: string | null = null
+
+function ensureSpaceTapScript(): string {
+  if (!spaceTapScriptPath || !fs.existsSync(spaceTapScriptPath)) {
+    spaceTapScriptPath = path.join(os.tmpdir(), 'cs2fragforge_spacetap.ps1')
+    fs.writeFileSync(spaceTapScriptPath, PS_SPACE_TAPS, 'utf-8')
+  }
+  return spaceTapScriptPath
+}
+
+/**
+ * Send Space key taps to CS2 window (Insight Agent "spec prime").
+ *
+ * Before demo_gototick, tapping Space activates the demo playback UI's
+ * "next player" function, which primes the spectator system so that
+ * subsequent spec_player commands work reliably.  This is critical for
+ * third-party demos (5E, etc.) where the Demo UI is not initialised on
+ * first load.
+ *
+ * Uses SendInput when CS2 is foreground, falls back to PostMessage.
+ * Does NOT open the developer console.
+ */
+export async function sendSpaceTaps(count: number): Promise<boolean> {
+  if (count <= 0) return true
+  try {
+    const script = ensureSpaceTapScript()
+    const result = await execPowershell(
+      `powershell -NoProfile -ExecutionPolicy Bypass -File "${script}" "${count}"`,
+      10_000
+    )
+    return result.trim() === 'OK'
+  } catch (err) {
+    console.warn('[SpaceTap] Failed:', err)
     return false
   }
 }

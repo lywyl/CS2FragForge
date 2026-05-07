@@ -5,6 +5,8 @@ export type RecordingStatus =
   | 'configuring-obs'
   | 'launching-cs2'
   | 'waiting-load'
+  | 'loading-demo'
+  | 'preparing-record'
   | 'recording'
   | 'stopping'
   | 'splitting'
@@ -34,6 +36,15 @@ export interface RecordingProgress {
   error?: string
 }
 
+export interface KillDetail {
+  tick: number
+  victimName: string
+  victimSteamId: number
+  victimUserId: number  // spec_player slot for victim
+  weapon: string
+  headshot: boolean
+}
+
 export interface RecordingHighlight {
   id: string
   playerName: string
@@ -44,7 +55,8 @@ export interface RecordingHighlight {
   round: number
   type: string
   score: number
-  killTicks?: number[]  // 每次击杀的 tick，用于智能跳跃录制 (kill-centric ±3s)
+  killTicks?: number[]     // 每次击杀的 tick，用于智能跳跃录制 (kill-centric ±3s)
+  killDetails?: KillDetail[]  // 每次击杀的受害者信息，用于 POV 回放
 }
 
 export interface ObsConfig {

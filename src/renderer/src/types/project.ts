@@ -13,8 +13,17 @@ export interface Highlight {
   weapons: string[]
   score: number
   headshotCount?: number
-  killTicks?: number[]  // 每次击杀的 tick
+  killTicks?: number[]           // 每次击杀的 tick
+  killDetails?: KillDetail[]      // 每次击杀的受害者信息，POV 回放
   selected?: boolean
+}
+export interface KillDetail {
+  tick: number
+  victimName: string
+  victimSteamId: number
+  victimUserId: number
+  weapon: string
+  headshot: boolean
 }
 
 export interface Clip {

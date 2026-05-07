@@ -5,9 +5,8 @@ import { DemoLauncher } from './demo-launcher'
 import { OBSService } from './obs-service'
 import { writeLaunchCfg, writeGsiCfg } from './cfg-writer'
 import { startGsiServer, stopGsiServer, resetGsiReady, waitForGsiReady, awaitGsiAllplayerSlots, awaitFreshGsiSteamId, getLatestGsiTimestamp } from './gsi-ready'
-import { injectTimedSequence, findCs2Window } from './win-console-inject'
-import { splitVideo, cleanupObsRecording } from './video-post-processor'
-import { getFfmpegPath } from './ffmpeg'
+import { injectTimedSequence, findCs2Window, sendSpaceTaps } from './win-console-inject'
+import { snapshotUserConfigs, restoreUserConfigs, hasSnapshot } from './cs2-config-backup'
 import type {
   RecordingRequest,
   RecordingResult,
@@ -22,12 +21,23 @@ const WINDOW_DETECT_TIMEOUT_MS = 30_000
 const DEMO_SETTLE_MS = 8_000  // increased — CS2 needs time to fully load demo
 const OBS_SCENE_NAME = 'CS2FragForge'
 const OBS_SOURCE_NAME = 'CS2 Game Capture'
-const BUFFER_SEC = 5
 const SPEC_CAL_MAX_SLOT = 16
 const SPEC_CAL_SLOT_TIMEOUT = 600   // ms per slot for GSI update
 const SPEC_CAL_SETTLE_MS = 150     // ms after spec_player before reading GSI
+const SPEC_CAL_SEEK_PAD = 500      // ticks before first kill to seek for calibration
 const PRE_KILL_SEC = 3
 const POST_KILL_SEC = 3
+// POV replay segments — disabled by default.  When enabled, multi-kill clips
+// get additional victim-perspective replays after the main killer segment via
+// OBS PauseRecord/ResumeRecord.  Insight Agent has this as an opt-in per-clip
+// flag; we keep the code but skip it until the switch-back timing is verified.
+const POV_ENABLED = false
+// Engine burn compensation (seconds): demo time consumed by injection overhead
+// after demo_resume before spec_player takes effect + hideconsole settles.
+// Matches Insight Agent's RESUME_DELAY(0.5) + SPEC_SETTLE(0.4) + POST_HIDE(0.55) +
+// PRE_RECORD(0.35) + INJECT_OVERHEAD(2.0) = 3.8s.
+// Prevents the demo from playing past the kill moment in the wrong camera.
+const ENGINE_BURN_SEC = 3.8
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms))
@@ -99,13 +109,18 @@ export class RecordingOrchestrator {
       console.log(`[Orchestrator] GSI config written, URI: ${gsiUri}`)
 
       this.launchCfgPath = await writeLaunchCfg(
-        { demoStem: stem, fpsMax: 30 },
+        { demoStem: stem, fpsMax: 500 },
         this.cfgDir,
         stem
       )
 
       const outputDir = request.outputDir ?? path.join(path.dirname(request.demoPath), 'clips')
       if (this.isCancelled) return this.cancelResult(clips, request.highlights.length)
+
+      // ── Snapshot user configs before CS2 touches them ─────────────
+      // Insight Agent pattern: protect config.cfg / video.txt / user_convars_*.vcfg
+      // so that our warmup cvars don't permanently overwrite the player's settings.
+      snapshotUserConfigs(request.cs2Path)
 
       // ─── Step 4: Launch CS2 ───────────────────────────────────────
       this.reportProgress('launching-cs2', 15, 0, request.highlights.length, 'launching', 'Launching CS2...')
@@ -139,19 +154,11 @@ export class RecordingOrchestrator {
       await sleep(DEMO_SETTLE_MS)
       if (this.isCancelled) return this.cancelResult(clips, request.highlights.length)
 
-      // ─── Step 7: Pause demo at load point ─────────────────────────
-      this.reportProgress('preparing-record', 28, 0, request.highlights.length, 'preparing', 'Pausing demo at load point...')
-      console.log('[Orchestrator] Injecting demo_pause...')
-      const pauseOk = await injectTimedSequence([{ cmd: 'demo_pause', delay: 500 }])
-      if (!pauseOk) {
-        console.warn('[Orchestrator] demo_pause injection failed — CS2 window may not be responsive')
-      }
-
-      // ─── Step 7.5: Calibrate spec_player slots via GSI ───────────
-      // CS2's spec_player requires numeric slot indices. GSI allplayers
-      // payload maps steamid -> observer_slot. We seek to tick 0, wait
-      // for the allplayers data, then build the mapping.
-      this.reportProgress('preparing-record', 29, 0, request.highlights.length, 'preparing', 'Calibrating player slots...')
+      // ─── Step 7: Calibrate spec_player slots via GSI ──────────────
+      // Skips the old pre-calibration demo_pause — the calibration seek
+      // now includes its own pause, and demo_pause is a TOGGLE that
+      // would unpause us if we were already paused.
+      this.reportProgress('configuring-obs', 15, 0, request.highlights.length, 'preparing', 'Calibrating player slots...')
       const slotBySteamId = await this.calibrateSpecSlots(request)
       if (slotBySteamId.size > 0) {
         console.log(`[Orchestrator] Slot calibration: ${slotBySteamId.size} players mapped`)
@@ -163,57 +170,44 @@ export class RecordingOrchestrator {
         console.warn('[Orchestrator] Falling back to playerSteamId as slot number')
       }
 
-      // ─── Step 8: Start OBS recording ──────────────────────────────
-      this.reportProgress('recording', 30, 0, request.highlights.length, 'recording', 'Starting OBS recording...')
-      try {
-        await this.obsService.startRecording()
-        this.obsRecordingActive = true
-      } catch (err) {
-        return { success: false, clips, error: (err as Error).message }
-      }
-      const recordingStart = Date.now()
-
-      // ─── Step 9: Per-clip seek + record loop (kill-centric, Insight Agent pattern) ──
-      const timestamps: Array<{ id: string; startSec: number; durationSec: number; outputName: string }> = []
-
+      // ─── Step 8: Per-clip record loop (Insight Agent pattern) ─────
+      // Each clip gets its own OBS StartRecord/StopRecord cycle so that:
+      //   1. No FFmpeg splitting is needed — OBS produces individual files
+      //   2. If one clip's spec_player fails, other clips are unaffected
+      //   3. Output filenames are correct per-clip (player_map_round_type.mp4)
+      //
+      // Insight Agent reference: _execute_single_clip_recording()
       for (let i = 0; i < request.highlights.length; i++) {
-        if (this.isCancelled) {
-          await this.stopObsSafe()
-          break
-        }
+        if (this.isCancelled) break
 
         const hl = request.highlights[i]
         const isLastClip = i === request.highlights.length - 1
 
-        // ── Kill-centric seek ─────────────────────────────────────
-        // If we have kill_ticks, seek to (first_kill - PRE_KILL_SEC) and
-        // play until (last_kill + POST_KILL_SEC). Otherwise fall back to
-        // clip tickStart/tickEnd + configurable preRoll/postRoll.
+        // ── Compute seek tick with engine burn compensation ─────────
         let gotoTick: number
         let clipDurationSec: number
         const tickRate = request.tickRate
+        const engineBurnTicks = ENGINE_BURN_SEC * tickRate
 
         if (hl.killTicks && hl.killTicks.length > 0) {
           const kills = hl.killTicks.sort((a, b) => a - b)
           const firstKill = kills[0]
           const lastKill = kills[kills.length - 1]
-          gotoTick = Math.max(0, firstKill - PRE_KILL_SEC * tickRate)
+          gotoTick = Math.max(0, firstKill - PRE_KILL_SEC * tickRate - engineBurnTicks)
           const endTick = lastKill + POST_KILL_SEC * tickRate
           clipDurationSec = (endTick - gotoTick) / tickRate
-          console.log(`[Orchestrator] Clip ${i + 1}: kill-centric ${hl.killTicks.length} kills, tick ${gotoTick}→${endTick} (${clipDurationSec.toFixed(1)}s)`)
         } else {
-          // Fallback: use tickStart/tickEnd with preRoll/postRoll
-          gotoTick = Math.max(0, hl.tickStart - request.preRoll * tickRate)
+          gotoTick = Math.max(0, hl.tickStart - request.preRoll * tickRate - engineBurnTicks)
           const endTick = hl.tickEnd + request.postRoll * tickRate
           clipDurationSec = (endTick - gotoTick) / tickRate
-          console.log(`[Orchestrator] Clip ${i + 1}: full round fallback, tick ${gotoTick}→${endTick} (${clipDurationSec.toFixed(1)}s)`)
         }
 
-        this.reportProgress('recording', 35 + Math.round((i / request.highlights.length) * 30),
+        this.reportProgress('recording', 30 + Math.round((i / request.highlights.length) * 40),
           i, request.highlights.length, 'recording',
           `Recording ${i + 1}/${request.highlights.length}: ${hl.playerName} - ${hl.type}`)
 
-        // ── spec_player slot resolution ───────────────────────────
+        // ── spec_player slot resolution (per-clip) ──────────────────
+        // Priority: GSI calibrated slot > Python-computed parsed slot > name fallback
         const calibratedSlot = slotBySteamId.get(String(hl.playerSteamId))
         const parsedSlot = hl.playerUserId > 0 ? hl.playerUserId : null
 
@@ -231,65 +225,219 @@ export class RecordingOrchestrator {
 
         console.log(`[Orchestrator] Clip ${i + 1}: goto=${gotoTick} name=${hl.playerName} steamid=${hl.playerSteamId} calSlot=${calibratedSlot} parsedSlot=${parsedSlot} slot=${playerSlot} src=${specSource}`)
 
-        // ── Build spec commands ────────────────────────────────────
-        // Insight Agent pattern: spec_mode + spec_player must happen AFTER
-        // demo_resume. CS2 silently ignores perspective switches while the
-        // demo is paused. We split into two injections:
-        //   Phase 1: demo_pause → demo_timescale 1 → demo_gototick → demo_resume
-        //   Phase 2: spec_mode 5 → spec_player <N>  (after short settle)
-        const specCmds: Array<{ cmd: string; delay: number }> = []
-        if (playerSlot !== null && playerSlot > 0) {
-          specCmds.push(
-            { cmd: 'spec_mode 5', delay: 150 },
-            { cmd: `spec_player ${playerSlot}`, delay: 0 },
-          )
-        } else if (hl.playerName) {
-          specCmds.push(
-            { cmd: 'spec_mode 5', delay: 150 },
-            { cmd: `spec_player "${hl.playerName}"`, delay: 0 },
+        // ── Space-tap priming (Insight Agent "spec prime") ─────────
+        // Tapping Space before seeking activates the demo playback UI's
+        // player-switching system.  Without this, spec_player may be
+        // silently ignored on third-party demos (5E, etc.).
+        if (!isLastClip || i === 0) {
+          const spaceOk = await sendSpaceTaps(1)
+          if (!spaceOk) console.warn(`[Orchestrator] Space tap failed for clip ${i + 1}`)
+        }
+
+        // ── Combined seek + spec + hideconsole injection ────────────
+        // Single PowerShell call: [warmup cvars] → demo_pause → gototick → resume → spec_mode → spec_player → hideconsole
+        const combinedSteps: Array<{ cmd: string; delay: number }> = []
+
+        // Session warmup cvars on first clip only (Insight Agent pattern)
+        if (i === 0) {
+          combinedSteps.push(
+            { cmd: 'cl_draw_only_deathnotices 1', delay: 50 },
+            { cmd: 'spec_show_xray 1', delay: 50 },
+            { cmd: 'hud_showtargetid 0', delay: 50 },
+            { cmd: 'tv_nochat 1', delay: 50 },
+            { cmd: 'cl_hud_telemetry_frametime_show 0', delay: 50 },
           )
         }
 
-        // Phase 1: Seek to tick and resume playback
-        const seekSteps: Array<{ cmd: string; delay: number }> = [
+        combinedSteps.push(
           { cmd: 'demo_pause', delay: 100 },
           { cmd: 'demo_timescale 1', delay: 0 },
           { cmd: `demo_gototick ${gotoTick}`, delay: 3500 },
-          { cmd: 'demo_resume', delay: 250 },
-        ]
-        const seekOk = await injectTimedSequence(seekSteps)
-        if (!seekOk) console.warn(`[Orchestrator] Seek injection failed for clip ${i + 1}`)
+          { cmd: 'demo_resume', delay: 500 },
+        )
 
-        // Phase 2: Switch camera after demo has resumed (CS2 ignores
-        // spec_player while paused, so we wait 200ms then inject separately)
-        if (seekOk && specCmds.length > 0) {
-          await sleep(200)
-          const specOk = await injectTimedSequence(specCmds)
-          if (!specOk) console.warn(`[Orchestrator] Spec injection failed for clip ${i + 1}`)
+        if (playerSlot !== null && playerSlot > 0) {
+          combinedSteps.push(
+            { cmd: 'spec_mode 5', delay: 150 },
+            { cmd: `spec_player ${playerSlot}`, delay: 400 },
+          )
+        } else if (hl.playerName) {
+          combinedSteps.push(
+            { cmd: 'spec_mode 5', delay: 150 },
+            { cmd: `spec_player "${hl.playerName}"`, delay: 400 },
+          )
         }
 
-        // ── Record timestamp for FFmpeg split ─────────────────────
-        const clipStartOffset = (Date.now() - recordingStart) / 1000
-        timestamps.push({
-          id: hl.id,
-          startSec: clipStartOffset,
-          durationSec: clipDurationSec + BUFFER_SEC / request.highlights.length,
-          outputName: `${hl.playerName}_${hl.type}_R${hl.round}_${hl.id}.mp4`
-        })
+        combinedSteps.push({ cmd: 'hideconsole', delay: 550 })
 
-        // Wait for clip to play through
+        const injectOk = await injectTimedSequence(combinedSteps)
+        if (!injectOk) {
+          console.warn(`[Orchestrator] Combined injection failed for clip ${i + 1}`)
+        }
+
+        // ── Pre-record settle (Insight Agent POST_HIDE + PRE_RECORD) ──
+        await sleep(350)
+
+        // ── OBS StartRecord for THIS clip ──────────────────────────
+        this.obsRecordingActive = false
+        try {
+          await this.obsService.startRecording()
+          this.obsRecordingActive = true
+        } catch (err) {
+          clips.push({
+            highlightId: hl.id,
+            outputPath: '',
+            duration: clipDurationSec,
+            success: false,
+            error: (err as Error).message,
+          })
+          continue
+        }
+
+        // ── Wait for main clip (killer POV) to play through ─────────
+        let totalClipSec = clipDurationSec
         await this.sleepCancellable(clipDurationSec * 1000)
 
+        // ── POV replay segments (Insight Agent pattern) ────────────
+        // For multi-kill clips with victim data, pause OBS, seek back to
+        // each victim's death tick, switch spec to the victim, and record
+        // a brief replay (2s before + 2s after the kill).  OBS PauseRecord/
+        // ResumeRecord keeps all segments in a single output file.
+        if (
+          POV_ENABLED &&
+          injectOk &&
+          hl.killDetails &&
+          hl.killDetails.length >= 2 &&
+          playerSlot !== null &&
+          playerSlot > 0
+        ) {
+          const replayPreSec = 2
+          const replayPostSec = 2
+          const replayDurationSec = replayPreSec + replayPostSec
+
+          for (let ki = 0; ki < hl.killDetails.length; ki++) {
+            if (this.isCancelled) break
+            const kd = hl.killDetails[ki]
+
+            // Resolve victim spec slot
+            let vSlot = slotBySteamId.get(String(kd.victimSteamId))
+            if (!vSlot || vSlot <= 0) vSlot = kd.victimUserId
+            if (!vSlot || vSlot <= 0) {
+              console.warn(`[Orchestrator] POV skip: no slot for victim ${kd.victimName}`)
+              continue
+            }
+
+            console.log(`[Orchestrator] POV ${ki + 1}/${hl.killDetails.length}: victim=${kd.victimName} slot=${vSlot} tick=${kd.tick}`)
+
+            // ── Pause OBS ────────────────────────────────────────
+            try { await this.obsService.pauseRecording() } catch { continue }
+
+            // ── Pause demo + seek + switch spec + resume (short GOTO for nearby seek) ──
+            const povTick = Math.max(0, kd.tick - replayPreSec * tickRate)
+            const povOk = await injectTimedSequence([
+              { cmd: 'demo_pause', delay: 100 },
+              { cmd: 'demo_timescale 1', delay: 0 },
+              { cmd: `demo_gototick ${povTick}`, delay: 1000 },
+              { cmd: 'demo_resume', delay: 300 },
+              { cmd: 'spec_mode 5', delay: 100 },
+              { cmd: `spec_player ${vSlot}`, delay: 300 },
+              { cmd: 'hideconsole', delay: 350 },
+            ])
+
+            if (!povOk) {
+              console.warn(`[Orchestrator] POV inject failed for ${kd.victimName}`)
+              try { await this.obsService.resumeRecording() } catch { /* ignore */ }
+              continue
+            }
+
+            // ── Pre-record settle ────────────────────────────────
+            await sleep(200)
+
+            // ── Resume OBS ───────────────────────────────────────
+            try { await this.obsService.resumeRecording() } catch { continue }
+
+            // ── Wait for replay ──────────────────────────────────
+            await this.sleepCancellable(replayDurationSec * 1000)
+            totalClipSec += replayDurationSec
+          }
+
+          // ── Pause OBS before switching spec back ─────────────────
+          // The last POV segment left OBS recording; pause it now so the
+          // console UI from the spec-switch injection isn't captured.
+          try { await this.obsService.pauseRecording() } catch { /* ignore */ }
+
+          // ── Switch spec back to killer for next clip ────────────
+          if (!isLastClip && !this.isCancelled) {
+            await injectTimedSequence([
+              { cmd: 'demo_pause', delay: 100 },
+              { cmd: 'spec_mode 5', delay: 100 },
+              { cmd: `spec_player ${playerSlot}`, delay: 300 },
+              { cmd: 'hideconsole', delay: 200 },
+            ])
+            // Resume demo so it's PLAYING — the next clip's combined
+            // injection starts with demo_pause (a TOGGLE) and must
+            // target a playing demo to correctly pause it.
+            await injectTimedSequence([{ cmd: 'demo_resume', delay: 100 }])
+          }
+        }
+
+        // ── OBS StopRecord for THIS clip ────────────────────────────
+        let obsOutputPath: string | null = null
+        try {
+          // Ensure recording is not paused before stopping
+          try { await this.obsService.resumeRecording() } catch { /* may already be recording */ }
+          obsOutputPath = await this.obsService.stopRecording()
+          this.obsRecordingActive = false
+        } catch (err) {
+          clips.push({
+            highlightId: hl.id,
+            outputPath: '',
+            duration: totalClipSec,
+            success: false,
+            error: (err as Error).message,
+          })
+          continue
+        }
+
+        if (!obsOutputPath) {
+          clips.push({
+            highlightId: hl.id,
+            outputPath: '',
+            duration: totalClipSec,
+            success: false,
+            error: 'OBS did not return output path',
+          })
+          continue
+        }
+
+        // ── Rename output to a meaningful name ──────────────────────
+        const targetName = `${hl.playerName}_${hl.type}_R${hl.round}_${hl.id}.mp4`
+        const targetPath = path.join(outputDir, targetName)
+        try {
+          await fs.mkdir(outputDir, { recursive: true })
+          await fs.rename(obsOutputPath, targetPath)
+          console.log(`[Orchestrator] Clip ${i + 1} saved: ${targetPath} (${totalClipSec.toFixed(1)}s)`)
+          clips.push({
+            highlightId: hl.id,
+            outputPath: targetPath,
+            duration: totalClipSec,
+            success: true,
+          })
+        } catch (err) {
+          console.warn(`[Orchestrator] Rename failed for clip ${i + 1}, using original path`)
+          clips.push({
+            highlightId: hl.id,
+            outputPath: obsOutputPath,
+            duration: totalClipSec,
+            success: true,
+          })
+        }
+
+        // ── After last clip: inject quit ────────────────────────────
         if (isLastClip) {
-          // Inject quit AFTER clip finishes — as separate injection so
-          // quit doesn't fire mid-clip (it was previously in the seek
-          // sequence and would exit CS2 while OBS was still recording)
           console.log('[Orchestrator] Injecting quit after last clip...')
           const quitOk = await injectTimedSequence([{ cmd: 'quit', delay: 500 }])
           if (quitOk) this.cs2QuitInjected = true
-        } else {
-          console.log(`[Orchestrator] Pausing before clip ${i + 2}...`)
-          await injectTimedSequence([{ cmd: 'demo_pause', delay: 500 }])
         }
 
         if (this.isCancelled) break
@@ -297,45 +445,6 @@ export class RecordingOrchestrator {
 
       if (this.cs2QuitInjected) {
         console.log('[Orchestrator] CS2 quit injected; will skip taskkill in cleanup')
-      }
-
-      // ─── Step 10: Stop OBS recording ─────────────────────────────
-      this.reportProgress('stopping', 70, 0, request.highlights.length, 'stopping', 'Stopping OBS recording...')
-      let obsOutputPath: string | null = null
-      try {
-        obsOutputPath = await this.obsService.stopRecording()
-        this.obsRecordingActive = false
-      } catch (err) {
-        return { success: false, clips, error: (err as Error).message }
-      }
-      if (!obsOutputPath) {
-        return { success: false, clips, error: 'OBS did not return output path' }
-      }
-      if (this.isCancelled) return this.cancelResult(clips, request.highlights.length)
-
-      // ─── Step 11: FFmpeg split ────────────────────────────────────
-      this.reportProgress('splitting', 75, 0, request.highlights.length, 'preparing', 'Splitting video into clips...')
-      const ffmpegPath = getFfmpegPath()
-
-      try {
-        const outputPaths = await splitVideo(obsOutputPath, timestamps, outputDir, ffmpegPath)
-        for (let i = 0; i < request.highlights.length; i++) {
-          const hl = request.highlights[i]
-          const outputPath = outputPaths[i] ?? ''
-          const duration = timestamps.find(t => t.id === hl.id)?.durationSec ?? 0
-          let success = false
-          try { await fs.access(outputPath); success = true } catch { /* file missing */ }
-          clips.push({ highlightId: hl.id, outputPath, duration, success })
-        }
-        await cleanupObsRecording(obsOutputPath)
-      } catch (err) {
-        const msg = (err as Error).message
-        console.warn(`[Orchestrator] FFmpeg split error: ${msg}`)
-        for (let i = clips.length; i < request.highlights.length; i++) {
-          const hl = request.highlights[i]
-          const dur = timestamps.find(t => t.id === hl.id)?.durationSec ?? 0
-          clips.push({ highlightId: hl.id, outputPath: '', duration: dur, success: false, error: msg })
-        }
       }
 
       const successCount = clips.filter((c) => c.success).length
@@ -380,50 +489,79 @@ export class RecordingOrchestrator {
   }
 
   /**
-   * Active spec_player slot calibration — Insight Agent pattern.
+   * Smart spec_player slot calibration — Insight Agent pattern.
    *
-   * CS2's spec_player requires NUMERIC slot indices, but GSI allplayers
-   * observer_slot is unreliable when the demo is paused. Instead we:
+   * Instead of blindly scanning all 16 slots at tick ~0, we:
+   * 1. Seek to a tick near the first highlight's kills (post-warmup, all players present)
+   * 2. Only scan up to (uniquePlayerCount + 2) slots, not always 16
+   * 3. Stop early as soon as every highlight player is mapped
    *
-   * 1. First try passive allplayers read (fast path)
-   * 2. If that fails, actively iterate slots 1..16:
-   *    - Inject spec_mode 5 + spec_player <N>
-   *    - Wait for GSI to update
-   *    - Read player.steamid to determine which player is at slot N
-   *    - Build steamid → slot mapping
-   *
-   * The demo must be UNPAUSED (playing) for spec_player to take effect.
-   * We use demo_timescale 0.05 to play in extreme slow-motion during scan.
+   * Returns a Map<steamid, slot> that maps player Steam IDs to console
+   * spec_player slot numbers.
    */
   private async calibrateSpecSlots(request: RecordingRequest): Promise<Map<string, number>> {
-    // ── Fast path: try passive allplayers read first ────────────────
+    // ── Try passive allplayers read for diagnostics ─────────────────
+    // GSI allplayers observer_slot does NOT reliably match console spec_player
+    // slot numbering (Insight Agent: "allplayers observer_slot is complete but
+    // not treated as console spec_player").  We read it only for logging; the
+    // active scan below is authoritative.
     const passiveSlots = await awaitGsiAllplayerSlots(3000)
-    if (passiveSlots.size >= 2) {
-      console.log(`[Orchestrator] Passive GSI calibration: ${passiveSlots.size} players`)
-      return passiveSlots
+    if (passiveSlots.size > 0) {
+      console.log(`[Orchestrator] Passive GSI allplayers: ${passiveSlots.size} players (diagnostic only)`)
     }
 
-    console.log('[Orchestrator] Passive GSI calibration insufficient, starting active slot scan...')
+    // ── Determine calibration tick ─────────────────────────────────
+    const allKillTicks = request.highlights
+      .flatMap(h => h.killTicks ?? [])
+      .filter(t => t > 0)
+      .sort((a, b) => a - b)
 
-    // ── Active scan: iterate spec_player slots ─────────────────────
-    // Resume demo in extreme slow-motion so spec_player takes effect
-    // but we don't lose much time
-    await injectTimedSequence([
+    const calTick = allKillTicks.length > 0
+      ? Math.max(1, allKillTicks[0] - SPEC_CAL_SEEK_PAD)
+      : Math.max(1, request.tickRate)
+
+    console.log(`[Orchestrator] Calibration tick: ${calTick} (first kill ~${allKillTicks[0] ?? '?'})`)
+
+    // ── Determine how many slots to scan ────────────────────────────
+    const targetSteamIds = new Set(
+      request.highlights.map(h => String(h.playerSteamId))
+    )
+    const highlightPlayerCount = targetSteamIds.size
+    const minScan = Math.min(SPEC_CAL_MAX_SLOT, 10)
+    const maxSlot = Math.min(SPEC_CAL_MAX_SLOT, Math.max(minScan, highlightPlayerCount + 2))
+
+    console.log(`[Orchestrator] Calibration targets: ${highlightPlayerCount} highlight player(s), scanning slots 1..${maxSlot}`)
+
+    // ── Seek to calibration tick in slow-motion ─────────────────────
+    // Insight Agent pattern: demo_pause + gototick together, then timescale + resume.
+    const seekOk = await injectTimedSequence([
+      { cmd: 'demo_pause', delay: 100 },
+      { cmd: `demo_gototick ${calTick}`, delay: 3500 },
       { cmd: 'demo_timescale 0.05', delay: 50 },
       { cmd: 'demo_resume', delay: 500 },
     ])
+    if (!seekOk) {
+      console.warn('[Orchestrator] Calibration seek failed — falling back to parsed slots')
+      return new Map()
+    }
 
+    // ── Post-seek settle: let GSI stabilise at the new tick ─────────
+    // Insight Agent waits goto_delay(2s) + resume_delay(4s) before scanning.
+    // We combine into a single settle period.
+    console.log('[Orchestrator] Post-seek settle (4s) for GSI stabilisation...')
+    await sleep(4000)
+
+    // ── Active scan: iterate slots, stop early when all targets mapped ──
     const mapping = new Map<string, number>()
-    const maxSlot = SPEC_CAL_MAX_SLOT
+    const unmapped = new Set(targetSteamIds)
 
     for (let slot = 1; slot <= maxSlot; slot++) {
-      if (this.isCancelled) break
+      if (this.isCancelled || unmapped.size === 0) break
 
       const beforeTimestamp = getLatestGsiTimestamp()
       const ok = await injectTimedSequence([
         { cmd: 'spec_mode 5', delay: 100 },
         { cmd: `spec_player ${slot}`, delay: SPEC_CAL_SETTLE_MS },
-        { cmd: 'hideconsole', delay: 0 },
       ])
 
       if (!ok) {
@@ -434,20 +572,29 @@ export class RecordingOrchestrator {
       const steamId = await awaitFreshGsiSteamId(beforeTimestamp, SPEC_CAL_SLOT_TIMEOUT)
       if (steamId) {
         mapping.set(steamId, slot)
-        console.log(`[Orchestrator] Spec scan slot ${slot} → steamid ${steamId}`)
+        if (unmapped.has(steamId)) {
+          unmapped.delete(steamId)
+          console.log(`[Orchestrator] Spec scan slot ${slot} → ${steamId} ✓ (${unmapped.size} left)`)
+        } else {
+          console.log(`[Orchestrator] Spec scan slot ${slot} → ${steamId}`)
+        }
       }
     }
 
-    // Re-pause after scan
+    if (unmapped.size > 0) {
+      console.warn(`[Orchestrator] Calibration missed ${unmapped.size} player(s), will use parsed fallback`)
+    }
+
+    // ── Cleanup: reset timescale but leave demo PLAYING ──────────────
+    // demo_pause is a TOGGLE in CS2.  The combined injection for each
+    // clip starts with demo_pause to pause the demo before seeking.
+    // If we paused here, the clip's leading demo_pause would UNPAUSE
+    // instead.  So we reset timescale and let the demo coast at 1x.
     await injectTimedSequence([
       { cmd: 'demo_timescale 1', delay: 100 },
-      { cmd: 'demo_pause', delay: 500 },
     ])
 
-    console.log(`[Orchestrator] Active spec scan complete: ${mapping.size} players mapped`)
-    for (const [sid, slot] of mapping) {
-      console.log(`[Orchestrator]   steamid=${sid} -> slot=${slot}`)
-    }
+    console.log(`[Orchestrator] Calibration done: ${mapping.size} slots mapped, ${unmapped.size} missed`)
     return mapping
   }
 
@@ -474,6 +621,23 @@ export class RecordingOrchestrator {
     return false
   }
 
+  /**
+   * Poll for CS2 window to disappear. Used after quit injection to ensure
+   * CS2 has fully exited before restoring user config files.
+   */
+  private async waitForCs2Exit(): Promise<void> {
+    const deadline = Date.now() + 10_000
+    while (Date.now() < deadline) {
+      const found = await findCs2Window()
+      if (!found) {
+        console.log('[Orchestrator] CS2 window gone — safe to restore configs')
+        return
+      }
+      await sleep(300)
+    }
+    console.warn('[Orchestrator] CS2 window still present after 10s — restoring configs anyway')
+  }
+
   private async cleanup(): Promise<void> {
     if (this.cleanedUp) return
     this.cleanedUp = true
@@ -483,6 +647,12 @@ export class RecordingOrchestrator {
       try { await this.demoLauncher?.terminate() } catch { /* ignore */ }
     } else {
       console.log('[Orchestrator] Skipping terminate — quit already injected via console')
+      // Wait for CS2 to fully exit before touching config files (quit takes ~2-3s)
+      await this.waitForCs2Exit()
+    }
+    // Restore user config files to pre-recording state
+    if (hasSnapshot()) {
+      restoreUserConfigs()
     }
     if (this.launchCfgPath) {
       try { await fs.unlink(this.launchCfgPath) } catch { /* ignore */ }
