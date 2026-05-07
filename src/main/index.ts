@@ -6,6 +6,7 @@ import { PythonBridge } from './python-bridge'
 import { CS2PathResolver } from './cs2-path-resolver'
 import { getFfmpegPath, getFfprobePath } from './ffmpeg'
 import { ExportService } from './export-service'
+import { VideoMergeService } from './video-merge-service'
 import { RecordingOrchestrator } from './recording-orchestrator'
 import { getSettings, setSettings, resetSettings } from './settings-store'
 import { IPC_CHANNELS } from '../shared/ipc'
@@ -235,6 +236,55 @@ function registerIpcHandlers(): void {
       defaultPath: 'output.mp4'
     })
     return result.canceled ? null : result.filePath
+  })
+
+  // Video merge handlers
+  let mergeService: VideoMergeService | null = null
+
+  ipcMain.handle(IPC_CHANNELS.DIALOG_OPEN_MULTI, async (event, options) => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    if (!window) return null
+    const result = await dialog.showOpenDialog(window, {
+      properties: ['openFile', 'multiSelections'],
+      filters: options?.filters || [
+        { name: 'Video Files', extensions: ['mp4', 'avi', 'mkv', 'mov', 'wmv'] },
+        { name: 'All Files', extensions: ['*'] }
+      ]
+    })
+    return result.canceled ? null : result.filePaths
+  })
+
+  ipcMain.handle(IPC_CHANNELS.VIDEO_MERGE, async (event, videoPaths: string[]) => {
+    const webContents = event.sender
+
+    let ffmpegPath: string
+    let ffprobePath: string
+    try {
+      ffmpegPath = getFfmpegPath()
+      ffprobePath = getFfprobePath()
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'ffmpeg/ffprobe not found'
+      return { success: false, error: msg }
+    }
+
+    mergeService = new VideoMergeService(ffmpegPath, ffprobePath, (progress) => {
+      webContents.send(IPC_CHANNELS.VIDEO_MERGE_PROGRESS, progress)
+    })
+
+    try {
+      const result = await mergeService.merge(videoPaths)
+      mergeService = null
+      return result
+    } catch (err) {
+      mergeService = null
+      const message = err instanceof Error ? err.message : 'Merge failed'
+      return { success: false, error: message }
+    }
+  })
+
+  ipcMain.handle(IPC_CHANNELS.VIDEO_MERGE_CANCEL, async () => {
+    mergeService?.cancel()
+    mergeService = null
   })
 
   // Project persistence

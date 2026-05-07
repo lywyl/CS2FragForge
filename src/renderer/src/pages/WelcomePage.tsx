@@ -1,14 +1,41 @@
-import React, { useCallback, useState } from 'react'
+import React, { useCallback, useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { FolderOpen, FileVideo, Loader2, Film } from 'lucide-react'
 import { useProjectStore } from '../stores/useProjectStore'
+import { MergeProgressOverlay } from '../components/MergeProgressOverlay'
 import { useTranslation } from '../i18n'
 
 export const WelcomePage: React.FC = () => {
   const navigate = useNavigate()
-  const { setProject, setLoading, setError, createProjectFromVideo, isLoading, error } = useProjectStore()
+  const {
+    setProject, setLoading, setError, createProjectFromVideo,
+    createProjectFromMultipleVideos,
+    mergeStatus, mergeProgress, setMergeProgress, setMergeStatus,
+    isLoading, error
+  } = useProjectStore()
   const [isDragOver, setIsDragOver] = useState(false)
   const { t } = useTranslation()
+
+  const handleCancelMerge = useCallback(async () => {
+    await window.electronAPI.videoMergeCancel()
+    setMergeStatus('idle')
+    setMergeProgress(null)
+  }, [setMergeStatus, setMergeProgress])
+
+  // Subscribe to merge progress
+  useEffect(() => {
+    if (mergeStatus !== 'merging') return
+    const unsubscribe = window.electronAPI.onVideoMergeProgress((progress) => {
+      setMergeProgress(progress)
+      if (progress.status === 'done') {
+        setMergeStatus('done')
+        navigate('/editor')
+      }
+      if (progress.status === 'error') setMergeStatus('error')
+      if (progress.status === 'cancelled') setMergeStatus('idle')
+    })
+    return unsubscribe
+  }, [mergeStatus, setMergeProgress, setMergeStatus, navigate])
 
   const handleFile = useCallback(
     async (filePath: string) => {
@@ -37,7 +64,7 @@ export const WelcomePage: React.FC = () => {
           id: `hl-${i}`,
           type: h.type as string,
           playerName: h.player_name as string,
-          playerSteamId: h.player_steamid as number,
+          playerSteamId: h.player_steamid as string,
           playerUserId: h.player_userid as number,
           round: h.round as number,
           tickStart: h.tick_start as number,
@@ -50,7 +77,7 @@ export const WelcomePage: React.FC = () => {
           killDetails: (h.kill_details as Array<Record<string, unknown>> | undefined)?.map(kd => ({
             tick: kd.tick as number,
             victimName: kd.victim_name as string,
-            victimSteamId: kd.victim_steamid as number,
+            victimSteamId: kd.victim_steamid as string,
             victimUserId: kd.victim_userid as number,
             weapon: kd.weapon as string,
             headshot: kd.headshot as boolean,
@@ -65,7 +92,7 @@ export const WelcomePage: React.FC = () => {
           players: ((gameInfoResult as Record<string, unknown>).players as Array<Record<string, unknown>>).map(
             (p) => ({
               name: p.name as string,
-              steamId: p.steamid as number,
+              steamId: p.steamid as string,
               team: p.team as string,
               kills: p.kills as number,
               deaths: p.deaths as number
@@ -115,16 +142,21 @@ export const WelcomePage: React.FC = () => {
 
   const handleImportVideo = useCallback(async () => {
     try {
-      const filePath = await window.electronAPI.openVideoDialog()
-      if (filePath) {
-        const videoName = filePath.split(/[\\/]/).pop() || t('welcome.error.unknownVideo')
-        createProjectFromVideo(filePath, videoName)
+      const filePaths = await window.electronAPI.openVideoDialogMulti()
+      if (!filePaths || filePaths.length === 0) return
+
+      if (filePaths.length === 1) {
+        const videoName = filePaths[0].split(/[\\/]/).pop() || t('welcome.error.unknownVideo')
+        createProjectFromVideo(filePaths[0], videoName)
         navigate('/editor')
+      } else {
+        await createProjectFromMultipleVideos(filePaths)
+        // Navigation happens in merge progress subscription when done
       }
     } catch {
       setError(t('welcome.error.videoFailed'))
     }
-  }, [createProjectFromVideo, navigate, setError, t])
+  }, [createProjectFromVideo, createProjectFromMultipleVideos, navigate, setError, t])
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
@@ -158,6 +190,11 @@ export const WelcomePage: React.FC = () => {
 
   return (
     <div className="flex items-center justify-center h-full">
+      {/* Merge progress overlay */}
+      {mergeStatus === 'merging' && (
+        <MergeProgressOverlay progress={mergeProgress} onCancel={handleCancelMerge} />
+      )}
+
       <div className="text-center max-w-lg">
         <div className="mb-6">
           <FileVideo className="w-16 h-16 text-cs2-gold mx-auto mb-4" />

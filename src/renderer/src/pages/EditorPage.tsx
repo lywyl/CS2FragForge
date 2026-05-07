@@ -7,6 +7,7 @@ import { ClipEditor } from '../components/ClipEditor'
 import { Timeline } from '../components/Timeline'
 import { AudioTrackPanel } from '../components/AudioTrackPanel'
 import { ClipInspector } from '../components/ClipInspector'
+import { MergeProgressOverlay } from '../components/MergeProgressOverlay'
 import { useTranslation } from '../i18n'
 import type { Clip } from '../types/project'
 
@@ -19,6 +20,11 @@ export const EditorPage: React.FC = () => {
     removeClip,
     reorderClips,
     createProjectFromVideo,
+    createProjectFromMultipleVideos,
+    mergeStatus,
+    mergeProgress,
+    setMergeProgress,
+    setMergeStatus,
     setError
   } = useProjectStore()
 
@@ -149,20 +155,47 @@ export const EditorPage: React.FC = () => {
 
   const handleImportVideo = useCallback(async () => {
     try {
-      const filePath = await window.electronAPI.openVideoDialog()
-      if (filePath) {
-        const videoName = filePath.split(/[\\/]/).pop() || t('editor.unknownVideo')
-        createProjectFromVideo(filePath, videoName)
+      const filePaths = await window.electronAPI.openVideoDialogMulti()
+      if (!filePaths || filePaths.length === 0) return
+
+      if (filePaths.length === 1) {
+        const videoName = filePaths[0].split(/[\\/]/).pop() || t('editor.unknownVideo')
+        createProjectFromVideo(filePaths[0], videoName)
+      } else {
+        await createProjectFromMultipleVideos(filePaths)
       }
     } catch {
       setError(t('editor.videoFailed'))
     }
-  }, [createProjectFromVideo, setError, t])
+  }, [createProjectFromVideo, createProjectFromMultipleVideos, setError, t])
+
+  const handleCancelMerge = useCallback(async () => {
+    await window.electronAPI.videoMergeCancel()
+    setMergeStatus('idle')
+    setMergeProgress(null)
+  }, [setMergeStatus, setMergeProgress])
+
+  // Subscribe to merge progress
+  useEffect(() => {
+    if (mergeStatus !== 'merging') return
+    const unsubscribe = window.electronAPI.onVideoMergeProgress((progress) => {
+      setMergeProgress(progress)
+      if (progress.status === 'done') setMergeStatus('done')
+      if (progress.status === 'error') setMergeStatus('error')
+      if (progress.status === 'cancelled') setMergeStatus('idle')
+    })
+    return unsubscribe
+  }, [mergeStatus, setMergeProgress, setMergeStatus])
 
   // No video loaded — show import prompt
   if (!videoPath) {
     return (
       <div className="flex items-center justify-center h-full">
+        {/* Merge progress overlay */}
+        {mergeStatus === 'merging' && (
+          <MergeProgressOverlay progress={mergeProgress} onCancel={handleCancelMerge} />
+        )}
+
         <div className="text-center">
           <Film className="w-16 h-16 text-cs2-text-muted mx-auto mb-4" />
           <h2 className="text-xl font-bold text-white mb-2">{t('editor.noVideo')}</h2>
@@ -172,7 +205,8 @@ export const EditorPage: React.FC = () => {
           <div className="flex gap-3 justify-center">
             <button
               onClick={handleImportVideo}
-              className="flex items-center gap-2 px-4 py-2 bg-cs2-gold hover:bg-cs2-gold-dark text-cs2-deep rounded-lg transition-colors font-medium"
+              disabled={mergeStatus === 'merging'}
+              className="flex items-center gap-2 px-4 py-2 bg-cs2-gold hover:bg-cs2-gold-dark text-cs2-deep rounded-lg transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Import className="w-4 h-4" />
               {t('editor.importVideo')}

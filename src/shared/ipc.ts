@@ -44,7 +44,13 @@ export const IPC_CHANNELS = {
   // Settings persistence
   SETTINGS_GET: 'settings:get',
   SETTINGS_SET: 'settings:set',
-  SETTINGS_RESET: 'settings:reset'
+  SETTINGS_RESET: 'settings:reset',
+
+  // Video merge
+  DIALOG_OPEN_MULTI: 'dialog:openMulti',
+  VIDEO_MERGE: 'video:merge',
+  VIDEO_MERGE_PROGRESS: 'video:mergeProgress',
+  VIDEO_MERGE_CANCEL: 'video:mergeCancel'
 } as const
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS]

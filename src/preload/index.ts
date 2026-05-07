@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { IPC_CHANNELS } from '../shared/ipc'
 import type { ExportRequest, ExportProgress } from '../shared/export-types'
 import type { AppSettings } from '../shared/settings-types'
+import type { MergeResult, MergeProgress } from '../shared/merge-types'
 import type { RecordingRequest, RecordingResult, RecordingProgress } from '../shared/recording-types'
 
 export type ElectronAPI = {
@@ -39,6 +40,12 @@ export type ElectronAPI = {
   // Dialog
   openDialog: (options?: { filters?: Array<{ name: string; extensions: string[] }> }) => Promise<string | null>
   openVideoDialog: () => Promise<string | null>
+  openVideoDialogMulti: () => Promise<string[] | null>
+
+  // Video merge
+  videoMerge: (videoPaths: string[]) => Promise<MergeResult>
+  videoMergeCancel: () => Promise<void>
+  onVideoMergeProgress: (callback: (progress: MergeProgress) => void) => () => void
 
   // CS2 environment
   cs2FindPath: () => Promise<{
@@ -104,6 +111,24 @@ const electronAPI: ElectronAPI = {
         { name: 'All Files', extensions: ['*'] }
       ]
     }),
+  openVideoDialogMulti: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.DIALOG_OPEN_MULTI, {
+      filters: [
+        { name: 'Video Files', extensions: ['mp4', 'avi', 'mkv', 'mov', 'wmv'] },
+        { name: 'All Files', extensions: ['*'] }
+      ]
+    }),
+
+  // Video merge
+  videoMerge: (videoPaths) => ipcRenderer.invoke(IPC_CHANNELS.VIDEO_MERGE, videoPaths),
+  videoMergeCancel: () => ipcRenderer.invoke(IPC_CHANNELS.VIDEO_MERGE_CANCEL),
+  onVideoMergeProgress: (callback) => {
+    const handler = (_event: unknown, progress: MergeProgress) => callback(progress)
+    ipcRenderer.on(IPC_CHANNELS.VIDEO_MERGE_PROGRESS, handler)
+    return () => {
+      ipcRenderer.removeListener(IPC_CHANNELS.VIDEO_MERGE_PROGRESS, handler)
+    }
+  },
 
   // CS2 environment
   cs2FindPath: () => ipcRenderer.invoke(IPC_CHANNELS.CS2_FIND_PATH),

@@ -3,6 +3,7 @@ import { Project, Highlight, Clip, AudioTrack, GameInfo, ProjectStatus } from '.
 import type { ExportStatus, ExportProgress, ExportSettings } from '../../../shared/export-types'
 import { DEFAULT_EXPORT_SETTINGS } from '../../../shared/export-types'
 import type { RecordingStatus, RecordingProgress, RecordingResult } from '../../../shared/recording-types'
+import type { MergeProgress, MergeResult } from '../../../shared/merge-types'
 
 interface ProjectState {
   project: Project | null
@@ -31,6 +32,14 @@ interface ProjectState {
 
   // Video project
   createProjectFromVideo: (videoPath: string, videoName: string) => void
+  createProjectFromMultipleVideos: (videoPaths: string[]) => Promise<void>
+
+  // Video merge
+  mergeStatus: 'idle' | 'merging' | 'done' | 'error' | 'cancelled'
+  mergeProgress: MergeProgress | null
+  setMergeStatus: (status: 'idle' | 'merging' | 'done' | 'error' | 'cancelled') => void
+  setMergeProgress: (progress: MergeProgress | null) => void
+  resetMerge: () => void
 
   // Audio tracks
   addAudioTrack: (track: AudioTrack) => void
@@ -84,6 +93,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   recordingStatus: 'idle',
   recordingProgress: null,
   recordingResult: null,
+  mergeStatus: 'idle',
+  mergeProgress: null,
 
   setProject: (project) => set({ project, error: null }),
   clearProject: () =>
@@ -192,6 +203,48 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }
     set({ project, error: null })
   },
+
+  createProjectFromMultipleVideos: async (videoPaths) => {
+    set({ mergeStatus: 'merging', mergeProgress: { status: 'pending', percent: 0, stepLabel: 'Starting merge...', currentStep: 0, totalSteps: 3 } })
+
+    try {
+      const result: MergeResult = await window.electronAPI.videoMerge(videoPaths)
+
+      if (!result.success) {
+        set({ mergeStatus: 'error', error: result.error || 'Merge failed' })
+        return
+      }
+
+      const fileName = videoPaths[0].split(/[\\/]/).pop()?.replace(/\.[^.]+$/, '') || 'Multi-Video'
+      const project: Project = {
+        id: crypto.randomUUID(),
+        demoPath: '',
+        demoName: videoPaths.map(p => p.split(/[\\/]/).pop()).join(', '),
+        cs2InstallPath: '',
+        name: fileName,
+        createdAt: Date.now(),
+        highlights: [],
+        clips: [],
+        audioTracks: [],
+        gameInfo: null,
+        status: 'edited',
+        error: null,
+        sourceVideoPath: result.mergedPath,
+        sourceVideoPaths: videoPaths,
+        videoSegments: result.segments
+      }
+
+      set({ project, mergeStatus: 'done', mergeProgress: null, error: null })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Merge failed'
+      set({ mergeStatus: 'error', error: message })
+    }
+  },
+
+  // Merge
+  setMergeStatus: (mergeStatus) => set({ mergeStatus }),
+  setMergeProgress: (mergeProgress) => set({ mergeProgress }),
+  resetMerge: () => set({ mergeStatus: 'idle', mergeProgress: null }),
 
   addAudioTrack: (track) =>
     set((state) => ({

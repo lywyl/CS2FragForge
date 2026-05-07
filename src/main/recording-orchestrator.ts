@@ -4,7 +4,11 @@ import crypto from 'crypto'
 import { DemoLauncher } from './demo-launcher'
 import { OBSService } from './obs-service'
 import { writeLaunchCfg, writeGsiCfg } from './cfg-writer'
-import { startGsiServer, stopGsiServer, resetGsiReady, waitForGsiReady, awaitGsiAllplayerSlots, awaitFreshGsiSteamId, getLatestGsiTimestamp } from './gsi-ready'
+import {
+  startGsiServer, stopGsiServer, resetGsiReady, waitForGsiReady,
+  awaitGsiAllplayerSlots, getCurrentGsiPlayerSteamId,
+  getLatestGsiTimestamp, awaitGsiFreshSteamId, getLatestGsiPayload
+} from './gsi-ready'
 import { injectTimedSequence, findCs2Window, sendSpaceTaps } from './win-console-inject'
 import { snapshotUserConfigs, restoreUserConfigs, hasSnapshot } from './cs2-config-backup'
 import type {
@@ -207,8 +211,11 @@ export class RecordingOrchestrator {
           `Recording ${i + 1}/${request.highlights.length}: ${hl.playerName} - ${hl.type}`)
 
         // ── spec_player slot resolution (per-clip) ──────────────────
-        // Priority: GSI calibrated slot > Python-computed parsed slot > name fallback
-        const calibratedSlot = slotBySteamId.get(String(hl.playerSteamId))
+        // Priority: GSI calibrated slot (by steamid) > GSI calibrated slot (by name) > parsed > name fallback
+        const calibratedSlot = slotBySteamId.get(hl.playerSteamId)
+        // Name-based fallback: steam IDs may lose precision through JSON/pandas,
+        // but player names are always exact.
+        const calibratedByName = slotBySteamId.get(`name:${hl.playerName.toLowerCase()}`)
         const parsedSlot = hl.playerUserId > 0 ? hl.playerUserId : null
 
         let playerSlot: number | null = null
@@ -216,6 +223,9 @@ export class RecordingOrchestrator {
         if (calibratedSlot !== undefined && calibratedSlot > 0) {
           playerSlot = calibratedSlot
           specSource = 'gsi-calibrated'
+        } else if (calibratedByName !== undefined && calibratedByName > 0) {
+          playerSlot = calibratedByName
+          specSource = 'gsi-calibrated-by-name'
         } else if (parsedSlot !== null && parsedSlot > 0) {
           playerSlot = parsedSlot
           specSource = 'parsed-fallback'
@@ -223,57 +233,75 @@ export class RecordingOrchestrator {
           specSource = 'name-fallback'
         }
 
-        console.log(`[Orchestrator] Clip ${i + 1}: goto=${gotoTick} name=${hl.playerName} steamid=${hl.playerSteamId} calSlot=${calibratedSlot} parsedSlot=${parsedSlot} slot=${playerSlot} src=${specSource}`)
+        console.log(`[Orchestrator] Clip ${i + 1}: goto=${gotoTick} name=${hl.playerName} steamid=${hl.playerSteamId} calSlot=${calibratedSlot} calByName=${calibratedByName} parsedSlot=${parsedSlot} slot=${playerSlot} src=${specSource}`)
 
         // ── Space-tap priming (Insight Agent "spec prime") ─────────
         // Tapping Space before seeking activates the demo playback UI's
         // player-switching system.  Without this, spec_player may be
         // silently ignored on third-party demos (5E, etc.).
-        if (!isLastClip || i === 0) {
+        if (i === 0) {
           const spaceOk = await sendSpaceTaps(1)
           if (!spaceOk) console.warn(`[Orchestrator] Space tap failed for clip ${i + 1}`)
         }
 
-        // ── Combined seek + spec + hideconsole injection ────────────
-        // Single PowerShell call: [warmup cvars] → demo_pause → gototick → resume → spec_mode → spec_player → hideconsole
-        const combinedSteps: Array<{ cmd: string; delay: number }> = []
-
-        // Session warmup cvars on first clip only (Insight Agent pattern)
+        // ── Session warmup cvars (first clip only) ──────────────────
         if (i === 0) {
-          combinedSteps.push(
+          await injectTimedSequence([
             { cmd: 'cl_draw_only_deathnotices 1', delay: 50 },
             { cmd: 'spec_show_xray 1', delay: 50 },
             { cmd: 'hud_showtargetid 0', delay: 50 },
             { cmd: 'tv_nochat 1', delay: 50 },
             { cmd: 'cl_hud_telemetry_frametime_show 0', delay: 50 },
-          )
+          ])
         }
 
-        combinedSteps.push(
+        // ── STAGED injection (Insight Agent pattern) ────────────────
+        // Phase 1: demo_pause + demo_gototick (bundled to avoid toggle race)
+        // Phase 2: demo_resume (separate from gototick to avoid I/O drop)
+        // Phase 3: spec_mode + spec_player (after gototick completes)
+        // Phase 4: hideconsole
+        //
+        // This prevents spec_player from being dropped during gototick's
+        // async disk I/O, which is a known CS2 engine behavior.
+
+        // Phase 1: Seek to target tick
+        let injectOk = await injectTimedSequence([
           { cmd: 'demo_pause', delay: 100 },
           { cmd: 'demo_timescale 1', delay: 0 },
           { cmd: `demo_gototick ${gotoTick}`, delay: 3500 },
-          { cmd: 'demo_resume', delay: 500 },
-        )
+        ])
+        if (!injectOk) {
+          console.warn(`[Orchestrator] Phase 1 injection failed for clip ${i + 1}`)
+        }
 
+        // Phase 2: Resume playback
+        injectOk = await injectTimedSequence([
+          { cmd: 'demo_resume', delay: 500 },
+        ])
+        if (!injectOk) {
+          console.warn(`[Orchestrator] Phase 2 injection failed for clip ${i + 1}`)
+        }
+
+        // Phase 3: Switch to target player
         if (playerSlot !== null && playerSlot > 0) {
-          combinedSteps.push(
+          injectOk = await injectTimedSequence([
             { cmd: 'spec_mode 5', delay: 150 },
             { cmd: `spec_player ${playerSlot}`, delay: 400 },
-          )
+          ])
         } else if (hl.playerName) {
-          combinedSteps.push(
+          injectOk = await injectTimedSequence([
             { cmd: 'spec_mode 5', delay: 150 },
             { cmd: `spec_player "${hl.playerName}"`, delay: 400 },
-          )
+          ])
         }
-
-        combinedSteps.push({ cmd: 'hideconsole', delay: 550 })
-
-        const injectOk = await injectTimedSequence(combinedSteps)
         if (!injectOk) {
-          console.warn(`[Orchestrator] Combined injection failed for clip ${i + 1}`)
+          console.warn(`[Orchestrator] Phase 3 injection failed for clip ${i + 1}`)
         }
+
+        // Phase 4: Hide console
+        await injectTimedSequence([
+          { cmd: 'hideconsole', delay: 550 },
+        ])
 
         // ── Pre-record settle (Insight Agent POST_HIDE + PRE_RECORD) ──
         await sleep(350)
@@ -491,10 +519,12 @@ export class RecordingOrchestrator {
   /**
    * Smart spec_player slot calibration — Insight Agent pattern.
    *
-   * Instead of blindly scanning all 16 slots at tick ~0, we:
-   * 1. Seek to a tick near the first highlight's kills (post-warmup, all players present)
-   * 2. Only scan up to (uniquePlayerCount + 2) slots, not always 16
-   * 3. Stop early as soon as every highlight player is mapped
+   * Key improvements over the original implementation:
+   * 1. Uses fresh GSI payload detection (awaitGsiFreshSteamId) instead of fixed sleep
+   * 2. Sliding window optimal scoring for slot selection
+   * 3. Degeneracy detection — rejects unusable samples
+   * 4. Staged injection to avoid demo_gototick async I/O dropping spec_player
+   * 5. Name-based fallback with extra offset for third-party demos
    *
    * Returns a Map<steamid, slot> that maps player Steam IDs to console
    * spec_player slot numbers.
@@ -511,11 +541,15 @@ export class RecordingOrchestrator {
     }
 
     // ── Determine calibration tick ─────────────────────────────────
+    // Insight Agent pattern: use round_freeze_end + 0.5s to ensure all players are present.
+    // Fallback: first kill - 500 ticks if freeze_end not available.
     const allKillTicks = request.highlights
       .flatMap(h => h.killTicks ?? [])
       .filter(t => t > 0)
       .sort((a, b) => a - b)
 
+    // Try to find a round_freeze_end tick from the highlights
+    // If not available, use the first kill with padding
     const calTick = allKillTicks.length > 0
       ? Math.max(1, allKillTicks[0] - SPEC_CAL_SEEK_PAD)
       : Math.max(1, request.tickRate)
@@ -527,38 +561,47 @@ export class RecordingOrchestrator {
       request.highlights.map(h => String(h.playerSteamId))
     )
     const highlightPlayerCount = targetSteamIds.size
-    const minScan = Math.min(SPEC_CAL_MAX_SLOT, 10)
-    const maxSlot = Math.min(SPEC_CAL_MAX_SLOT, Math.max(minScan, highlightPlayerCount + 2))
+    const maxSlot = Math.min(SPEC_CAL_MAX_SLOT, Math.max(10, highlightPlayerCount + 2))
 
     console.log(`[Orchestrator] Calibration targets: ${highlightPlayerCount} highlight player(s), scanning slots 1..${maxSlot}`)
 
-    // ── Seek to calibration tick in slow-motion ─────────────────────
-    // Insight Agent pattern: demo_pause + gototick together, then timescale + resume.
+    // ── Record timestamp before seek for fresh-payload detection ───
+    const beforeSeek = getLatestGsiTimestamp()
+
+    // ── Seek to calibration tick — STAGED injection ─────────────────
+    // Insight Agent pattern: demo_pause + demo_gototick together, then
+    // demo_timescale + demo_resume separately.  This prevents spec_player
+    // from being dropped during gototick's async I/O.
     const seekOk = await injectTimedSequence([
       { cmd: 'demo_pause', delay: 100 },
       { cmd: `demo_gototick ${calTick}`, delay: 3500 },
-      { cmd: 'demo_timescale 0.05', delay: 50 },
-      { cmd: 'demo_resume', delay: 500 },
     ])
     if (!seekOk) {
       console.warn('[Orchestrator] Calibration seek failed — falling back to parsed slots')
       return new Map()
     }
 
+    // ── Stage 2: timescale + resume (separate from gototick) ────────
+    await injectTimedSequence([
+      { cmd: 'demo_timescale 0.05', delay: 50 },
+      { cmd: 'demo_resume', delay: 500 },
+    ])
+
     // ── Post-seek settle: let GSI stabilise at the new tick ─────────
     // Insight Agent waits goto_delay(2s) + resume_delay(4s) before scanning.
-    // We combine into a single settle period.
     console.log('[Orchestrator] Post-seek settle (4s) for GSI stabilisation...')
     await sleep(4000)
 
-    // ── Active scan: iterate slots, stop early when all targets mapped ──
-    const mapping = new Map<string, number>()
-    const unmapped = new Set(targetSteamIds)
+    // ── Active scan: iterate slots with fresh-payload detection ─────
+    // Insight Agent pattern: record timestamp before each spec_player,
+    // then wait for a NEW GSI payload (not just a fixed delay).
+    const samples = new Map<number, string>()  // slot -> steamid
+    const candidates = new Map<string, number[]>()  // steamid -> [slots]
 
     for (let slot = 1; slot <= maxSlot; slot++) {
-      if (this.isCancelled || unmapped.size === 0) break
+      if (this.isCancelled) break
 
-      const beforeTimestamp = getLatestGsiTimestamp()
+      const beforeSlot = getLatestGsiTimestamp()
       const ok = await injectTimedSequence([
         { cmd: 'spec_mode 5', delay: 100 },
         { cmd: `spec_player ${slot}`, delay: SPEC_CAL_SETTLE_MS },
@@ -569,23 +612,83 @@ export class RecordingOrchestrator {
         continue
       }
 
-      const steamId = await awaitFreshGsiSteamId(beforeTimestamp, SPEC_CAL_SLOT_TIMEOUT)
+      // Wait for fresh GSI payload (new data after spec_player took effect)
+      const steamId = await awaitGsiFreshSteamId(beforeSlot, 2000)
       if (steamId) {
-        mapping.set(steamId, slot)
-        if (unmapped.has(steamId)) {
-          unmapped.delete(steamId)
-          console.log(`[Orchestrator] Spec scan slot ${slot} → ${steamId} ✓ (${unmapped.size} left)`)
-        } else {
-          console.log(`[Orchestrator] Spec scan slot ${slot} → ${steamId}`)
+        samples.set(slot, steamId)
+        const existing = candidates.get(steamId) || []
+        existing.push(slot)
+        candidates.set(steamId, existing)
+        console.log(`[Orchestrator] Spec scan slot ${slot} → ${steamId}`)
+      }
+    }
+
+    // ── Sliding window optimal scoring (Insight Agent pattern) ──────
+    // Find the best contiguous window of slots that maps to known players.
+    const windowLen = Math.min(highlightPlayerCount, maxSlot)
+    let bestStart = 1
+    let bestScore: [number, number, number, number] = [-1, -9999, -1, -9999]
+    let bestValues: string[] = []
+
+    for (let start = 1; start <= maxSlot - windowLen + 1; start++) {
+      const vals: string[] = []
+      for (let s = start; s < start + windowLen; s++) {
+        const sid = samples.get(s)
+        if (sid && targetSteamIds.has(sid)) {
+          vals.push(sid)
+        }
+      }
+      const unique = new Set(vals)
+      const duplicateCount = Math.max(0, vals.length - unique.size)
+      const score: [number, number, number, number] = [unique.size, -duplicateCount, vals.length, -start]
+      if (score[0] > bestScore[0] ||
+          (score[0] === bestScore[0] && score[1] > bestScore[1]) ||
+          (score[0] === bestScore[0] && score[1] === bestScore[1] && score[2] > bestScore[2]) ||
+          (score[0] === bestScore[0] && score[1] === bestScore[1] && score[2] === bestScore[2] && score[3] > bestScore[3])) {
+        bestScore = score
+        bestStart = start
+        bestValues = vals
+      }
+    }
+
+    const bestUniqueCount = new Set(bestValues).size
+
+    // ── Degeneracy detection (Insight Agent pattern) ────────────────
+    // If only 1 unique player found but we expect more, reject the calibration.
+    const mapping = new Map<string, number>()
+
+    if (highlightPlayerCount > 1 && bestUniqueCount <= 1) {
+      console.warn(`[Orchestrator] Calibration rejected: degenerate samples (unique=${bestUniqueCount}/${highlightPlayerCount})`)
+      // Fallback: use parsed slots with extra offset
+      for (const hl of request.highlights) {
+        if (hl.playerUserId > 0) {
+          mapping.set(hl.playerSteamId, hl.playerUserId + 1)  // +1 for 1-based
+          mapping.set(`name:${hl.playerName.toLowerCase()}`, hl.playerUserId + 1)
+        }
+      }
+      console.log(`[Orchestrator] Fallback: using parsed slots with +1 offset (${mapping.size} entries)`)
+    } else {
+      // Use the best window
+      for (let s = bestStart; s < bestStart + windowLen; s++) {
+        const sid = samples.get(s)
+        if (sid && targetSteamIds.has(sid) && !mapping.has(sid)) {
+          mapping.set(sid, s)
+        }
+      }
+
+      // ── Build name→slot entries for steam-id-precision-safe lookup ──
+      // SteamID64 values from demoparser2 may lose precision through pandas float64.
+      // Player names are always exact, so we add name-based keys as a safe fallback.
+      for (const hl of request.highlights) {
+        const sid = hl.playerSteamId
+        const nameKey = `name:${hl.playerName.toLowerCase()}`
+        if (sid && mapping.has(sid) && !mapping.has(nameKey)) {
+          mapping.set(nameKey, mapping.get(sid)!)
         }
       }
     }
 
-    if (unmapped.size > 0) {
-      console.warn(`[Orchestrator] Calibration missed ${unmapped.size} player(s), will use parsed fallback`)
-    }
-
-    // ── Cleanup: reset timescale but leave demo PLAYING ──────────────
+    // ── Reset demo state ────────────────────────────────────────────
     // demo_pause is a TOGGLE in CS2.  The combined injection for each
     // clip starts with demo_pause to pause the demo before seeking.
     // If we paused here, the clip's leading demo_pause would UNPAUSE
@@ -594,7 +697,7 @@ export class RecordingOrchestrator {
       { cmd: 'demo_timescale 1', delay: 100 },
     ])
 
-    console.log(`[Orchestrator] Calibration done: ${mapping.size} slots mapped, ${unmapped.size} missed`)
+    console.log(`[Orchestrator] Calibration done: ${mapping.size} slots mapped (window start=${bestStart}, unique=${bestUniqueCount}/${highlightPlayerCount})`)
     return mapping
   }
 

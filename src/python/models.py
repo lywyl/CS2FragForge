@@ -6,7 +6,7 @@ class KillDetail(BaseModel):
     """Per-kill victim info for POV replay segments."""
     tick: int                          # tick when the kill occurred
     victim_name: str                   # victim player name
-    victim_steamid: int                # victim SteamID64
+    victim_steamid: str                # victim SteamID64 (string to avoid JS precision loss)
     victim_userid: int = 0             # victim spec_player slot (computed later)
     weapon: str = ""                   # weapon used
     headshot: bool = False             # was it a headshot
@@ -19,7 +19,7 @@ class ParseDemoRequest(BaseModel):
 class HighlightResult(BaseModel):
     type: str  # "3K", "4K", "ACE", "CLUTCH", "ECO_WIN"
     player_name: str
-    player_steamid: int
+    player_steamid: str  # string to avoid JS precision loss (> 2^53)
     player_userid: int  # engine-internal user_id for spec_player (parse_ticks + offset)
     round: int
     tick_start: int
@@ -34,7 +34,7 @@ class HighlightResult(BaseModel):
 
 class PlayerInfoResult(BaseModel):
     name: str
-    steamid: int
+    steamid: str  # string to avoid JS precision loss
     team: str
     kills: int
     deaths: int

@@ -108,9 +108,9 @@ class HighlightDetector:
         highlights.extend(self.detect_eco_wins())
 
         # Deduplicate: same player + same round = keep highest score
-        seen: Dict[Tuple[int, int, str], HighlightResult] = {}
+        seen: Dict[Tuple[int, str, str], HighlightResult] = {}
         for hl in highlights:
-            key = (hl.round, int(hl.player_steamid), hl.type)
+            key = (hl.round, hl.player_steamid, hl.type)
             if key not in seen or hl.score > seen[key].score:
                 seen[key] = hl
 
@@ -186,7 +186,7 @@ class HighlightDetector:
                 kill_details.append(KillDetail(
                     tick=int(k.get("tick", 0)),
                     victim_name=str(k.get("user_name", "")),
-                    victim_steamid=int(k.get("user_steamid", 0)),
+                    victim_steamid=str(k.get("user_steamid", "0")),
                     victim_userid=int(k.get("user_user_id", 0)),
                     weapon=str(k.get("weapon", "")),
                     headshot=bool(k.get("headshot", False)),
@@ -208,7 +208,7 @@ class HighlightDetector:
                 HighlightResult(
                     type=hl_type,
                     player_name=str(attacker_name),
-                    player_steamid=int(attacker_steamid),
+                    player_steamid=str(attacker_steamid),
                     player_userid=spec_slot,
                     round=round_num,
                     tick_start=tick_start,
@@ -368,7 +368,7 @@ class HighlightDetector:
                 HighlightResult(
                     type=hl_type,
                     player_name=clutch_name,
-                    player_steamid=int(clutch_steamid),
+                    player_steamid=str(clutch_steamid),
                     player_userid=spec_slot,
                     round=round_num,
                     tick_start=tick_start,
@@ -463,7 +463,7 @@ class HighlightDetector:
                     HighlightResult(
                         type="ECO_WIN",
                         player_name=str(player_name),
-                        player_steamid=int(player_steamid) if player_steamid else 0,
+                        player_steamid=str(player_steamid) if player_steamid else "0",
                         player_userid=int(player_userid) if player_userid else 0,
                         round=round_num,
                         tick_start=max(0, int(round_start_tick) - 5 * self.tick_rate),

@@ -39,7 +39,7 @@ export interface RecordingProgress {
 export interface KillDetail {
   tick: number
   victimName: string
-  victimSteamId: number
+  victimSteamId: string  // SteamID64 as string to avoid JS precision loss
   victimUserId: number  // spec_player slot for victim
   weapon: string
   headshot: boolean
@@ -48,7 +48,7 @@ export interface KillDetail {
 export interface RecordingHighlight {
   id: string
   playerName: string
-  playerSteamId: number
+  playerSteamId: string  // SteamID64 as string to avoid JS precision loss
   playerUserId: number
   tickStart: number
   tickEnd: number

@@ -280,6 +280,74 @@ export function awaitGsiAllplayerSlots(timeoutMs: number): Promise<Map<string, n
 }
 
 /**
+ * Wait for a fresh GSI payload after the given timestamp and extract steamid.
+ * Uses polling with short intervals to detect new payload arrival.
+ *
+ * @param afterTimestamp - Only accept payloads newer than this timestamp
+ * @param timeoutMs - Maximum wait time in milliseconds
+ * @returns The steamid of the currently spectated player, or null on timeout
+ */
+export function awaitGsiFreshSteamId(
+  afterTimestamp: number,
+  timeoutMs: number = 2000
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    const deadline = Date.now() + timeoutMs
+    const check = (): void => {
+      // Only use payloads received after the given timestamp (fresh data)
+      if (latestPayloadTimestamp > afterTimestamp && latestPayload) {
+        const player = latestPayload.player as Record<string, unknown> | undefined
+        if (player) {
+          const sid = player.steamid
+          if (sid) {
+            resolve(String(sid))
+            return
+          }
+        }
+      }
+      if (Date.now() >= deadline) {
+        // On timeout, return the latest steamid even if not fresh
+        const player = latestPayload?.player as Record<string, unknown> | undefined
+        const sid = player?.steamid
+        resolve(sid ? String(sid) : null)
+        return
+      }
+      setTimeout(check, 50)  // 50ms polling interval for responsiveness
+    }
+    check()
+  })
+}
+
+/**
+ * Wait for a fresh GSI payload after the given timestamp.
+ * Returns the full payload snapshot, or null on timeout.
+ *
+ * @param afterTimestamp - Only accept payloads newer than this timestamp
+ * @param timeoutMs - Maximum wait time in milliseconds
+ * @returns Object with lastPayload and lastPayloadAt, or null on timeout
+ */
+export function awaitGsiFreshPayload(
+  afterTimestamp: number,
+  timeoutMs: number = 2000
+): Promise<{ lastPayload: Record<string, unknown> | null; lastPayloadAt: number } | null> {
+  return new Promise((resolve) => {
+    const deadline = Date.now() + timeoutMs
+    const check = (): void => {
+      if (latestPayloadTimestamp > afterTimestamp && latestPayload) {
+        resolve({ lastPayload: latestPayload, lastPayloadAt: latestPayloadTimestamp })
+        return
+      }
+      if (Date.now() >= deadline) {
+        resolve({ lastPayload: latestPayload, lastPayloadAt: latestPayloadTimestamp })
+        return
+      }
+      setTimeout(check, 50)
+    }
+    check()
+  })
+}
+
+/**
  * Extract steamid -> observer_slot mapping from a GSI payload.
  *
  * CS2 GSI allplayers object: keys are slot numbers ("0","1",...),

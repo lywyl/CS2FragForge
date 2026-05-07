@@ -8,7 +8,9 @@
       "Bash(npx vitest *)",
       "Bash(node *)",
       "Bash(npx tsc *)",
-      "Bash(git stash *)"
+      "Bash(git stash *)",
+      "Bash(python -c \"from src.python.models import HighlightResult, KillDetail, PlayerInfoResult; print\\('models OK'\\)\")",
+      "Bash(python -c \"from src.python.services.highlight_detector import HighlightDetector; print\\('highlight_detector OK'\\)\")"
     ]
   }
 }

@@ -4,7 +4,7 @@ export interface Highlight {
   id: string
   type: HighlightType
   playerName: string
-  playerSteamId: number
+  playerSteamId: string  // SteamID64 as string to avoid JS precision loss
   playerUserId: number
   round: number
   tickStart: number
@@ -20,7 +20,7 @@ export interface Highlight {
 export interface KillDetail {
   tick: number
   victimName: string
-  victimSteamId: number
+  victimSteamId: string  // SteamID64 as string
   victimUserId: number
   weapon: string
   headshot: boolean
@@ -44,6 +44,13 @@ export interface AudioTrack {
   endSec: number
 }
 
+export interface VideoSegment {
+  sourcePath: string
+  name: string
+  duration: number
+  mergedOffset: number
+}
+
 export interface GameInfo {
   mapName: string
   tickRate: number
@@ -53,7 +60,7 @@ export interface GameInfo {
 
 export interface PlayerInfo {
   name: string
-  steamId: number
+  steamId: string  // SteamID64 as string
   team: string
   kills: number
   deaths: number
@@ -73,6 +80,8 @@ export interface Project {
   status: 'empty' | 'parsing' | 'parsed' | 'recording' | 'recorded' | 'edited' | 'exported' | 'error'
   error: string | null
   sourceVideoPath?: string
+  sourceVideoPaths?: string[]
+  videoSegments?: VideoSegment[]
 }
 
 export type ProjectStatus = Project['status']

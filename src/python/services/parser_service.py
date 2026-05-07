@@ -9,6 +9,7 @@ def _spec_player_id_offset(observed_user_ids: Optional[List[int]] = None) -> int
     将 parse_ticks 的原始 user_id 转换为 console spec_player 实际槽位。
 
     0-based user_id (含0) → +1 变为 1-based。
+    1..10 范围 → +1 与控制台槽位 2..11 对齐（第三方 demo 常见）。
     2..11 / 3..12 范围 → +1 与常见控制台槽位对齐。
     可通过 CS2_SPEC_PLAYER_SLOT_OFFSET 环境变量覆盖。
     """
@@ -20,9 +21,18 @@ def _spec_player_id_offset(observed_user_ids: Optional[List[int]] = None) -> int
             pass
     if observed_user_ids:
         vals = [int(v) for v in observed_user_ids if int(v) >= 0]
-        if vals and min(vals) == 0:
+        if not vals:
+            return 0
+        min_val = min(vals)
+        max_val = max(vals)
+        # 0-based user_id (contains 0) → +1
+        if min_val == 0:
             return 1
-        if vals and min(vals) >= 2 and max(vals) >= 11:
+        # 1..10 range (third-party demos like 5E) → +1
+        if min_val == 1 and max_val == 10:
+            return 1
+        # 2..11 / 3..12 range → +1
+        if min_val >= 2 and max_val >= 11:
             return 1
     return 0
 
@@ -202,7 +212,7 @@ class ParserService:
             return {name: uid + offset for name, uid in name_to_uid.items()}
         return name_to_uid
 
-    def get_kill_ticks(self, player_steamid: int, round_num: int) -> List[int]:
+    def get_kill_ticks(self, player_steamid: str, round_num: int) -> List[int]:
         """
         获取指定玩家在指定回合的击杀 tick 列表（升序）。
 
@@ -294,7 +304,7 @@ class ParserService:
                     if key not in player_stats:
                         player_stats[key] = {
                             "name": attacker_name,
-                            "steamid": int(attacker_sid),
+                            "steamid": str(attacker_sid),
                             "team": attacker_team or "",
                             "kills": 0,
                             "deaths": 0,
@@ -312,7 +322,7 @@ class ParserService:
                     if key not in player_stats:
                         player_stats[key] = {
                             "name": user_name,
-                            "steamid": int(user_sid),
+                            "steamid": str(user_sid),
                             "team": user_team or "",
                             "kills": 0,
                             "deaths": 0,
@@ -331,7 +341,7 @@ class ParserService:
             if key not in player_stats:
                 player_stats[key] = {
                     "name": p.get("name", "Unknown"),
-                    "steamid": int(sid),
+                    "steamid": str(sid),
                     "team": "",
                     "kills": 0,
                     "deaths": 0,
