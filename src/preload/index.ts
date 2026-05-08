@@ -68,7 +68,7 @@ export type ElectronAPI = {
   // Export
   exportStart: (request: ExportRequest) => Promise<{ success: boolean; outputPath?: string; error?: string }>
   exportCancel: () => Promise<void>
-  exportSelectOutput: () => Promise<string | null>
+  exportSelectOutput: (defaultName?: string) => Promise<string | null>
   onExportProgress: (callback: (progress: ExportProgress) => void) => () => void
 
   // Project persistence
@@ -82,6 +82,7 @@ export type ElectronAPI = {
 
   // File utilities
   getDroppedFilePath: (file: File) => string
+  deleteFiles: (paths: string[]) => Promise<void>
 
   // Window controls
   windowMinimize: () => void
@@ -151,12 +152,13 @@ const electronAPI: ElectronAPI = {
   // Export
   exportStart: (request) => ipcRenderer.invoke(IPC_CHANNELS.EXPORT_START, request),
   exportCancel: () => ipcRenderer.invoke(IPC_CHANNELS.EXPORT_CANCEL),
-  exportSelectOutput: () =>
+  exportSelectOutput: (defaultName) =>
     ipcRenderer.invoke(IPC_CHANNELS.EXPORT_SELECT_OUTPUT, {
       filters: [
         { name: 'Video Files', extensions: ['mp4', 'mkv'] },
         { name: 'All Files', extensions: ['*'] }
-      ]
+      ],
+      defaultName
     }),
   onExportProgress: (callback) => {
     const handler = (_event: unknown, progress: ExportProgress) => callback(progress)
@@ -184,4 +186,4 @@ const electronAPI: ElectronAPI = {
   windowClose: () => ipcRenderer.send(IPC_CHANNELS.WINDOW_CLOSE)
 }
 
-contextBridge.exposeInMainWorld('electronAPI', electronAPI)
+contextBridge.exposeInMainWorld('electronAPI', electronAPI)ld('electronAPI', electronAPI)

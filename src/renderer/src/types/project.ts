@@ -16,6 +16,9 @@ export interface Highlight {
   killTicks?: number[]           // 每次击杀的 tick
   killDetails?: KillDetail[]      // 每次击杀的受害者信息，POV 回放
   selected?: boolean
+  preRollOverride?: number
+  postRollOverride?: number
+  disableJumpCuts?: boolean
 }
 export interface KillDetail {
   tick: number

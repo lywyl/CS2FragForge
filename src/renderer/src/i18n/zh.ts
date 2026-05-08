@@ -193,4 +193,11 @@ export const zh: typeof en = {
   'common.clip': '个片段',
   'common.clips': '个片段',
   'common.cancel': '取消',
+  'common.save': '保存',
+
+  // Tuning
+  'tuning.title': '高光事件微调',
+  'tuning.preRoll': '前置缓冲 (秒)',
+  'tuning.postRoll': '后置缓冲 (秒)',
+  'tuning.enableJumpCuts': '启用智能跳跃剪辑',
 }

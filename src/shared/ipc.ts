@@ -46,6 +46,9 @@ export const IPC_CHANNELS = {
   SETTINGS_SET: 'settings:set',
   SETTINGS_RESET: 'settings:reset',
 
+  // File utilities
+  DELETE_FILES: 'file:delete',
+
   // Video merge
   DIALOG_OPEN_MULTI: 'dialog:openMulti',
   VIDEO_MERGE: 'video:merge',

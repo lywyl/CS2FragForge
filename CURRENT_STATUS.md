@@ -50,10 +50,13 @@ npm run dev        # 启动 Electron + Vite 开发服务器
 - 24 pytest tests, 85% coverage
 - 用真实 demo 验证：检测到 13 个 highlights
 
-### Phase 2: CS2 录制管线 ✅ (v3.0 — Insight Agent 完整移植)
-- `RecordingOrchestrator`: Per-clip OBS 录制编排器（OBS 连接 → 场景配置 → CS2 启动 → GSI 就绪 → **smart 校准** → per-clip StartRecord/StopRecord → POV 回放段 → cleanup）
-- `OBSService`: OBS WebSocket v5 服务（连接/断开、场景管理、Game Capture 自动创建、录制控制、**PauseRecord/ResumeRecord**、连接测试、陈旧录制预检）
+### Phase 2: CS2 录制管线 ✅ (v3.2 — 智能跳切与微调)
+- `RecordingOrchestrator`: Per-clip OBS 录制编排器（OBS 连接 → 场景配置 → CS2 启动 → GSI 就绪 → smart 校准 → per-clip 独立录制 → POV 回放段 → **智能跳切分段** → cleanup）
+- **智能跳跃剪辑 (Smart Jump-Cut)**: 自动分析多杀片段的 tick 间隔，当相邻两次击杀间隔超过阈值（默认 10 秒）时，自动在此期间使用 OBS `PauseRecord` 并快进，从而在一个文件中实现无缝跳切，去除无聊跑图时间。
+- **高光事件微调 (Highlight Tuning)**: `ProjectPage` 中单个高光卡片新增设置按钮，支持为每一个高光独立覆盖全局的 `pre-roll`（前置缓冲）和 `post-roll`（后置缓冲）时间，并可控制是否开启智能跳切。
+- `OBSService`: OBS WebSocket v5 服务（连接/断开、场景管理、Game Capture 自动创建、录制控制、PauseRecord/ResumeRecord、连接测试、陈旧录制预检）
 - `cs2-config-backup`: 用户配置保护（录制前快照 config.cfg/video.txt/user_convars_*.vcfg，录制后恢复）
+- **自动视频导入与清理**: 录制完成后，用户点击"Go to Editor"不仅会自动合并片段进入编辑器，还会使用项目智能命名（`玩家名_地图/Demo名`），并**自动清理**硬盘上零散的录制原素材。
 - `CfgWriter`: 启动 CFG + GSI CFG 生成器（playdemo + GSI allplayers 数据请求，`fps_max 500`）
 - `DemoLauncher`: CS2 进程管理（复制 demo、1920x1080 全屏启动、`quit` 控制台命令退出 + taskkill 后备，**移除 -nosound**）
 - `gsi-ready`: CS2 Game State Integration 服务（本地 HTTP 接收 GSI 心跳、就绪检测、allplayers slot 校准、**fresh steamid 检测**）
@@ -384,7 +387,7 @@ npm run dev        # 启动 Electron + Vite 开发服务器
 |------|:---:|
 | _prepare_clip_playback: seek + spec + hideconsole 时序 | ✅ |
 | _execute_single_clip_recording: per-clip StartRecord/StopRecord | ✅ |
-| build_smart_jump_segments: 击杀间隔分段 | ❌ |
+| build_smart_jump_segments: 击杀间隔分段 | ✅ |
 | POV victim segments | ⏸️ |
 | cs2_config_backup: 用户配置保护 | ✅ |
 | _recording_warmup_console_lines: session cvar | ✅ |

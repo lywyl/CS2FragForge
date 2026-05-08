@@ -201,10 +201,24 @@ export const RecordingPage: React.FC = () => {
           </div>
         )}
 
-        <div className="flex gap-3">
+        <div className="flex gap-3 mt-6">
+          <button
+            onClick={async () => {
+              if (successClips.length > 0) {
+                await useProjectStore.getState().importRecordedClips(
+                  successClips.map(c => c.outputPath)
+                )
+                navigate('/editor')
+              }
+            }}
+            disabled={successClips.length === 0}
+            className="flex-1 px-4 py-2.5 bg-cs2-gold hover:bg-cs2-gold-dark text-cs2-deep rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {t('recording.goToEditor', 'Go to Editor')}
+          </button>
           <button
             onClick={handleBackToProject}
-            className="flex-1 px-4 py-2.5 bg-cs2-gold hover:bg-cs2-gold-dark text-cs2-deep rounded-lg font-medium transition-colors"
+            className="flex-1 px-4 py-2.5 bg-cs2-elevated hover:bg-cs2-border border border-cs2-border text-gray-300 rounded-lg font-medium transition-colors"
           >
             {t('recording.backToProject')}
           </button>

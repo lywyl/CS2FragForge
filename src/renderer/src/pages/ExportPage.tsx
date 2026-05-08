@@ -53,7 +53,12 @@ export const ExportPage: React.FC = () => {
   const handleExport = useCallback(async () => {
     if (clips.length === 0) return
 
-    const path = await window.electronAPI.exportSelectOutput()
+    let defaultName = 'output.mp4'
+    if (project?.name) {
+      defaultName = `${project.name}.mp4`
+    }
+
+    const path = await window.electronAPI.exportSelectOutput(defaultName)
     if (!path) return
 
     setOutputPath(path)

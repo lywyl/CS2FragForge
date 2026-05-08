@@ -233,7 +233,7 @@ function registerIpcHandlers(): void {
     if (!window) return null
     const result = await dialog.showSaveDialog(window, {
       filters: options?.filters || [{ name: 'Video Files', extensions: ['mp4'] }],
-      defaultPath: 'output.mp4'
+      defaultPath: options?.defaultName || 'output.mp4'
     })
     return result.canceled ? null : result.filePath
   })
@@ -323,6 +323,15 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.SETTINGS_RESET, async () => {
     return resetSettings()
+  })
+
+  // File utilities
+  ipcMain.handle(IPC_CHANNELS.DELETE_FILES, async (_event, paths: string[]) => {
+    for (const p of paths) {
+      try {
+        await fs.promises.unlink(p)
+      } catch { /* ignore */ }
+    }
   })
 
   // Window control handlers

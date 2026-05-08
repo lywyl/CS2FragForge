@@ -57,6 +57,9 @@ export interface RecordingHighlight {
   score: number
   killTicks?: number[]     // 每次击杀的 tick，用于智能跳跃录制 (kill-centric ±3s)
   killDetails?: KillDetail[]  // 每次击杀的受害者信息，用于 POV 回放
+  preRollOverride?: number
+  postRollOverride?: number
+  disableJumpCuts?: boolean
 }
 
 export interface ObsConfig {

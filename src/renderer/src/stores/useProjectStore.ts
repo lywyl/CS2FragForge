@@ -147,6 +147,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       return { project: { ...state.project, highlights } }
     }),
 
+  updateHighlight: (id, updates) =>
+    set((state) => {
+      if (!state.project) return {}
+      const highlights = state.project.highlights.map((h) =>
+        h.id === id ? { ...h, ...updates } : h
+      )
+      return { project: { ...state.project, highlights } }
+    }),
+
   setClips: (clips) =>
     set((state) => ({
       project: state.project ? { ...state.project, clips } : null
@@ -235,6 +244,52 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }
 
       set({ project, mergeStatus: 'done', mergeProgress: null, error: null })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Merge failed'
+      set({ mergeStatus: 'error', error: message })
+    }
+  },
+
+  importRecordedClips: async (videoPaths) => {
+    const state = get()
+    if (!state.project) return
+
+    set({ mergeStatus: 'merging', mergeProgress: { status: 'pending', percent: 0, stepLabel: 'Starting merge...', currentStep: 0, totalSteps: 3 } })
+
+    try {
+      const result: MergeResult = await window.electronAPI.videoMerge(videoPaths)
+
+      if (!result.success) {
+        set({ mergeStatus: 'error', error: result.error || 'Merge failed' })
+        return
+      }
+
+      const selectedHighlights = state.project.highlights.filter(h => h.selected)
+      const firstHighlight = selectedHighlights.length > 0 ? selectedHighlights[0] : state.project.highlights[0]
+      const playerName = firstHighlight?.playerName || 'Player'
+      
+      let identifier = 'Video'
+      if (state.project.gameInfo?.map_name) {
+        identifier = state.project.gameInfo.map_name
+      } else if (state.project.demoName) {
+        identifier = state.project.demoName.replace(/\.dem$/i, '')
+      }
+      
+      const finalName = `${playerName}_${identifier}`
+
+      // Delete the original clips as they are now merged
+      await window.electronAPI.deleteFiles(videoPaths)
+
+      const updatedProject: Project = {
+        ...state.project,
+        name: finalName,
+        sourceVideoPath: result.mergedPath,
+        sourceVideoPaths: videoPaths,
+        videoSegments: result.segments,
+        status: 'edited'
+      }
+
+      set({ project: updatedProject, mergeStatus: 'done', mergeProgress: null, error: null })
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Merge failed'
       set({ mergeStatus: 'error', error: message })

@@ -285,6 +285,18 @@ export const ProjectPage: React.FC = () => {
                   {/* Score */}
                   <ScoreBar score={h.score} />
 
+                  {/* Settings Button */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setEditingHighlight(h)
+                    }}
+                    className="p-1.5 text-cs2-text-muted hover:text-cs2-gold hover:bg-cs2-elevated rounded transition-colors"
+                    title={t('tuning.title', 'Highlight Tuning')}
+                  >
+                    <Settings2 className="w-4 h-4" />
+                  </button>
+
                   {/* Tick Range */}
                   <div className="text-xs text-gray-500 text-right whitespace-nowrap">
                     {h.tickStart.toLocaleString()} → {h.tickEnd.toLocaleString()}
@@ -295,6 +307,13 @@ export const ProjectPage: React.FC = () => {
           )}
         </div>
       </div>
+      
+      {editingHighlight && (
+        <HighlightSettingsModal
+          highlight={editingHighlight}
+          onClose={() => setEditingHighlight(null)}
+        />
+      )}
     </div>
   )
 }

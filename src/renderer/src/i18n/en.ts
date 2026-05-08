@@ -191,6 +191,13 @@ export const en = {
   'common.clip': 'clip',
   'common.clips': 'clips',
   'common.cancel': 'Cancel',
+  'common.save': 'Save',
+
+  // Tuning
+  'tuning.title': 'Highlight Tuning',
+  'tuning.preRoll': 'Pre-roll (seconds)',
+  'tuning.postRoll': 'Post-roll (seconds)',
+  'tuning.enableJumpCuts': 'Enable Smart Jump-Cuts',
 } as const
 
 export type TranslationKey = keyof typeof en
