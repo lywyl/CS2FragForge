@@ -76,7 +76,10 @@ export const RecordingPage: React.FC = () => {
       type: h.type,
       score: h.score,
       killTicks: h.killTicks,
-      killDetails: h.killDetails
+      killDetails: h.killDetails,
+      preRollOverride: h.preRollOverride,
+      postRollOverride: h.postRollOverride,
+      disableJumpCuts: h.disableJumpCuts
     }))
 
     const tickRate = project.gameInfo?.tickRate ?? 64

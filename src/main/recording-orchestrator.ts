@@ -42,6 +42,12 @@ const POV_ENABLED = false
 // PRE_RECORD(0.35) + INJECT_OVERHEAD(2.0) = 3.8s.
 // Prevents the demo from playing past the kill moment in the wrong camera.
 const ENGINE_BURN_SEC = 3.8
+// Jump-cut burn compensation (seconds): shorter than ENGINE_BURN_SEC because
+// segment间切换 only needs to cover demo_resume + spec_player + hideconsole.
+const JUMP_CUT_BURN_SEC = 0.9
+// Safety tail pad (seconds): extra recording time after the last kill to avoid
+// abrupt cutoff.
+const RECORD_TAIL_PAD_SEC = 0.2
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms))
@@ -196,8 +202,10 @@ export class RecordingOrchestrator {
         const jumpCutGapTicks = jumpCutGapSec * tickRate
 
         interface RecordingSegment {
-          gotoTick: number
-          durationSec: number
+          seekTick: number
+          recordStartTick: number
+          recordEndTick: number
+          recordDurationSec: number
           isFirst: boolean
         }
         
@@ -212,10 +220,12 @@ export class RecordingOrchestrator {
           for (let k = 1; k < kills.length; k++) {
             if (kills[k] - kills[k - 1] > jumpCutGapTicks) {
               // Gap is too big, close current segment
-              const gotoTick = Math.max(0, currentStartTick - (segments.length === 0 ? engineBurnTicks : 0))
-              const durationSec = (currentEndTick - gotoTick) / tickRate
-              segments.push({ gotoTick, durationSec, isFirst: segments.length === 0 })
-              totalClipSec += durationSec
+              const recordStartTick = Math.max(0, currentStartTick)
+              const recordEndTick = currentEndTick
+              const seekTick = Math.max(0, recordStartTick - (segments.length === 0 ? engineBurnTicks : JUMP_CUT_BURN_SEC * tickRate))
+              const recordDurationSec = (recordEndTick - recordStartTick) / tickRate + RECORD_TAIL_PAD_SEC
+              segments.push({ seekTick, recordStartTick, recordEndTick, recordDurationSec, isFirst: segments.length === 0 })
+              totalClipSec += recordDurationSec
 
               // Start new segment
               currentStartTick = kills[k] - preRollSec * tickRate
@@ -226,29 +236,33 @@ export class RecordingOrchestrator {
             }
           }
           // Close the last segment
-          const gotoTick = Math.max(0, currentStartTick - (segments.length === 0 ? engineBurnTicks : 0))
-          const durationSec = (currentEndTick - gotoTick) / tickRate
-          segments.push({ gotoTick, durationSec, isFirst: segments.length === 0 })
-          totalClipSec += durationSec
+          const recordStartTick = Math.max(0, currentStartTick)
+          const recordEndTick = currentEndTick
+          const seekTick = Math.max(0, recordStartTick - (segments.length === 0 ? engineBurnTicks : JUMP_CUT_BURN_SEC * tickRate))
+          const recordDurationSec = (recordEndTick - recordStartTick) / tickRate + RECORD_TAIL_PAD_SEC
+          segments.push({ seekTick, recordStartTick, recordEndTick, recordDurationSec, isFirst: segments.length === 0 })
+          totalClipSec += recordDurationSec
         } else {
           // Single continuous segment
           const startTick = (hl.killTicks && hl.killTicks.length > 0) ? hl.killTicks[0] : hl.tickStart
           const endTick = (hl.killTicks && hl.killTicks.length > 0) ? hl.killTicks[hl.killTicks.length - 1] : hl.tickEnd
-          const gotoTick = Math.max(0, startTick - preRollSec * tickRate - engineBurnTicks)
-          const finalTick = endTick + postRollSec * tickRate
-          const durationSec = (finalTick - gotoTick) / tickRate
-          segments.push({ gotoTick, durationSec, isFirst: true })
-          totalClipSec = durationSec
+          const recordStartTick = Math.max(0, startTick - preRollSec * tickRate)
+          const recordEndTick = endTick + postRollSec * tickRate
+          const seekTick = Math.max(0, recordStartTick - engineBurnTicks)
+          const recordDurationSec = (recordEndTick - recordStartTick) / tickRate + RECORD_TAIL_PAD_SEC
+          segments.push({ seekTick, recordStartTick, recordEndTick, recordDurationSec, isFirst: true })
+          totalClipSec = recordDurationSec
         }
 
-        const firstGotoTick = segments[0].gotoTick
+        const firstGotoTick = segments[0].seekTick
 
         this.reportProgress('recording', 30 + Math.round((i / request.highlights.length) * 40),
           i, request.highlights.length, 'recording',
           `Recording ${i + 1}/${request.highlights.length}: ${hl.playerName} - ${hl.type}`)
 
         // ── spec_player slot resolution (per-clip) ──────────────────
-        // Priority: GSI calibrated slot (by steamid) > GSI calibrated slot (by name) > parsed > name fallback
+        // Priority: GSI calibrated slot (by steamid) > GSI calibrated slot (by name) > parsed
+        // Only numeric slots are accepted for reliable recording.
         const calibratedSlot = slotBySteamId.get(hl.playerSteamId)
         // Name-based fallback: steam IDs may lose precision through JSON/pandas,
         // but player names are always exact.
@@ -267,7 +281,9 @@ export class RecordingOrchestrator {
           playerSlot = parsedSlot
           specSource = 'parsed-fallback'
         } else {
+          // No numeric slot available — name fallback is unreliable
           specSource = 'name-fallback'
+          console.warn(`[Orchestrator] Clip ${i + 1}: No numeric slot for ${hl.playerName}, will attempt name fallback`)
         }
 
         console.log(`[Orchestrator] Clip ${i + 1}: goto=${firstGotoTick} name=${hl.playerName} steamid=${hl.playerSteamId} calSlot=${calibratedSlot} calByName=${calibratedByName} parsedSlot=${parsedSlot} slot=${playerSlot} src=${specSource} segments=${segments.length}`)
@@ -292,7 +308,23 @@ export class RecordingOrchestrator {
           ])
         }
 
+        // ── Prepare first segment BEFORE starting OBS recording ─────
+        const firstSegment = segments[0]
+        const prepared = await this.prepareSegmentPlayback(firstSegment, playerSlot, hl.playerName)
+        
+        if (!prepared) {
+          clips.push({
+            highlightId: hl.id,
+            outputPath: '',
+            duration: totalClipSec,
+            success: false,
+            error: 'Failed to prepare target POV',
+          })
+          continue
+        }
+
         // ── OBS StartRecord for THIS clip ──────────────────────────
+        // Must happen AFTER demo_gototick + demo_resume + spec_player + hideconsole + settle
         this.obsRecordingActive = false
         try {
           await this.obsService.startRecording()
@@ -308,68 +340,30 @@ export class RecordingOrchestrator {
           continue
         }
 
-        let injectOk = true
+        // ── Wait for first segment to play through ─────────────────
+        await this.sleepCancellable(firstSegment.recordDurationSec * 1000)
 
-        for (let segIdx = 0; segIdx < segments.length; segIdx++) {
+        // ── Handle subsequent segments (jump cuts) ─────────────────
+        let injectOk = true
+        for (let segIdx = 1; segIdx < segments.length; segIdx++) {
           const seg = segments[segIdx]
 
-          if (!seg.isFirst) {
-            try { await this.obsService.pauseRecording() } catch { /* ignore */ }
-          }
+          // Pause OBS before seeking
+          try { await this.obsService.pauseRecording() } catch { /* ignore */ }
 
-          // ── STAGED injection (Insight Agent pattern) ────────────────
-          // Phase 1: Seek to target tick
-          let segInjectOk = await injectTimedSequence([
-            { cmd: 'demo_pause', delay: 100 },
-            { cmd: 'demo_timescale 1', delay: 0 },
-            { cmd: `demo_gototick ${seg.gotoTick}`, delay: 3500 },
-          ])
-          if (!segInjectOk) {
-            console.warn(`[Orchestrator] Phase 1 injection failed for clip ${i + 1} segment ${segIdx + 1}`)
+          // Prepare segment while OBS is paused
+          const segPrepared = await this.prepareSegmentPlayback(seg, playerSlot, hl.playerName)
+          if (!segPrepared) {
+            console.warn(`[Orchestrator] Segment ${segIdx + 1} preparation failed for clip ${i + 1}`)
             injectOk = false
           }
 
-          // Phase 2: Resume playback
-          segInjectOk = await injectTimedSequence([
-            { cmd: 'demo_resume', delay: 500 },
-          ])
-          if (!segInjectOk) {
-            console.warn(`[Orchestrator] Phase 2 injection failed for clip ${i + 1} segment ${segIdx + 1}`)
-            injectOk = false
-          }
+          // Resume OBS after preparation
+          await sleep(200)
+          try { await this.obsService.resumeRecording() } catch { /* ignore */ }
 
-          // Phase 3: Switch to target player
-          if (playerSlot !== null && playerSlot > 0) {
-            segInjectOk = await injectTimedSequence([
-              { cmd: 'spec_mode 5', delay: 150 },
-              { cmd: `spec_player ${playerSlot}`, delay: 400 },
-            ])
-          } else if (hl.playerName) {
-            segInjectOk = await injectTimedSequence([
-              { cmd: 'spec_mode 5', delay: 150 },
-              { cmd: `spec_player "${hl.playerName}"`, delay: 400 },
-            ])
-          }
-          if (!segInjectOk) {
-            console.warn(`[Orchestrator] Phase 3 injection failed for clip ${i + 1} segment ${segIdx + 1}`)
-            injectOk = false
-          }
-
-          // Phase 4: Hide console
-          await injectTimedSequence([
-            { cmd: 'hideconsole', delay: 550 },
-          ])
-
-          // ── Pre-record settle (Insight Agent POST_HIDE + PRE_RECORD) ──
-          await sleep(350)
-
-          if (!seg.isFirst) {
-            await sleep(200)
-            try { await this.obsService.resumeRecording() } catch { /* ignore */ }
-          }
-
-          // ── Wait for main clip segment to play through ─────────
-          await this.sleepCancellable(seg.durationSec * 1000)
+          // Wait for segment to play through
+          await this.sleepCancellable(seg.recordDurationSec * 1000)
         }
 
         // ── POV replay segments (Insight Agent pattern) ────────────
@@ -563,6 +557,67 @@ export class RecordingOrchestrator {
   }
 
   /**
+   * Prepare a segment for playback: seek to tick, resume demo, switch to target player, hide console.
+   * This helper must be called BEFORE OBS StartRecord or ResumeRecord.
+   * 
+   * @returns true if preparation succeeded, false otherwise
+   */
+  private async prepareSegmentPlayback(
+    segment: RecordingSegment,
+    playerSlot: number | null,
+    playerName: string
+  ): Promise<boolean> {
+    // Phase 1: Seek to target tick
+    let ok = await injectTimedSequence([
+      { cmd: 'demo_pause', delay: 100 },
+      { cmd: 'demo_timescale 1', delay: 0 },
+      { cmd: `demo_gototick ${segment.seekTick}`, delay: 3500 },
+    ])
+    if (!ok) {
+      console.warn('[Orchestrator] prepareSegmentPlayback: Phase 1 (seek) failed')
+      return false
+    }
+
+    // Phase 2: Resume playback
+    ok = await injectTimedSequence([
+      { cmd: 'demo_resume', delay: 500 },
+    ])
+    if (!ok) {
+      console.warn('[Orchestrator] prepareSegmentPlayback: Phase 2 (resume) failed')
+      return false
+    }
+
+    // Phase 3: Switch to target player
+    if (playerSlot !== null && playerSlot > 0) {
+      ok = await injectTimedSequence([
+        { cmd: 'spec_mode 5', delay: 150 },
+        { cmd: `spec_player ${playerSlot}`, delay: 400 },
+      ])
+    } else if (playerName) {
+      // Name fallback: log warning but continue (not reliable)
+      console.warn(`[Orchestrator] prepareSegmentPlayback: using name fallback for ${playerName}`)
+      ok = await injectTimedSequence([
+        { cmd: 'spec_mode 5', delay: 150 },
+        { cmd: `spec_player "${playerName}"`, delay: 400 },
+      ])
+    }
+    if (!ok) {
+      console.warn('[Orchestrator] prepareSegmentPlayback: Phase 3 (spec_player) failed')
+      return false
+    }
+
+    // Phase 4: Hide console
+    await injectTimedSequence([
+      { cmd: 'hideconsole', delay: 550 },
+    ])
+
+    // Pre-record settle
+    await sleep(350)
+
+    return true
+  }
+
+  /**
    * Smart spec_player slot calibration — Insight Agent pattern.
    *
    * Key improvements over the original implementation:
@@ -603,16 +658,14 @@ export class RecordingOrchestrator {
     console.log(`[Orchestrator] Calibration tick: ${calTick} (first kill ~${allKillTicks[0] ?? '?'})`)
 
     // ── Determine how many slots to scan ────────────────────────────
+    // Always scan full range 1..SPEC_CAL_MAX_SLOT for reliable calibration
     const targetSteamIds = new Set(
       request.highlights.map(h => String(h.playerSteamId))
     )
     const highlightPlayerCount = targetSteamIds.size
-    const maxSlot = Math.min(SPEC_CAL_MAX_SLOT, Math.max(10, highlightPlayerCount + 2))
+    const maxSlot = SPEC_CAL_MAX_SLOT
 
     console.log(`[Orchestrator] Calibration targets: ${highlightPlayerCount} highlight player(s), scanning slots 1..${maxSlot}`)
-
-    // ── Record timestamp before seek for fresh-payload detection ───
-    const beforeSeek = getLatestGsiTimestamp()
 
     // ── Seek to calibration tick — STAGED injection ─────────────────
     // Insight Agent pattern: demo_pause + demo_gototick together, then
@@ -705,14 +758,14 @@ export class RecordingOrchestrator {
 
     if (highlightPlayerCount > 1 && bestUniqueCount <= 1) {
       console.warn(`[Orchestrator] Calibration rejected: degenerate samples (unique=${bestUniqueCount}/${highlightPlayerCount})`)
-      // Fallback: use parsed slots with extra offset
+      // Fallback: use parsed slots (Python already handles offset)
       for (const hl of request.highlights) {
         if (hl.playerUserId > 0) {
-          mapping.set(hl.playerSteamId, hl.playerUserId + 1)  // +1 for 1-based
-          mapping.set(`name:${hl.playerName.toLowerCase()}`, hl.playerUserId + 1)
+          mapping.set(hl.playerSteamId, hl.playerUserId)
+          mapping.set(`name:${hl.playerName.toLowerCase()}`, hl.playerUserId)
         }
       }
-      console.log(`[Orchestrator] Fallback: using parsed slots with +1 offset (${mapping.size} entries)`)
+      console.log(`[Orchestrator] Fallback: using parsed slots (${mapping.size} entries)`)
     } else {
       // Use the best window
       for (let s = bestStart; s < bestStart + windowLen; s++) {

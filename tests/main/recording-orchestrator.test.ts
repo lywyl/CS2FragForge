@@ -76,11 +76,32 @@ vi.mock('../../src/main/console-log-watcher', () => ({
 vi.mock('../../src/main/win-console-inject', () => ({
   injectTimedSequence: mockInjectTimedSequence,
   injectSingleCommand: vi.fn().mockResolvedValue(true),
-  cleanupInjectScript: vi.fn()
+  cleanupInjectScript: vi.fn(),
+  sendSpaceTaps: vi.fn().mockResolvedValue(true),
+  findCs2Window: vi.fn().mockResolvedValue(true)
 }))
 
 vi.mock('../../src/main/cfg-writer', () => ({
-  writeLaunchCfg: mockWriteLaunchCfg
+  writeLaunchCfg: mockWriteLaunchCfg,
+  writeGsiCfg: vi.fn().mockResolvedValue('D:\\cfg\\gsi.cfg')
+}))
+
+vi.mock('../../src/main/gsi-ready', () => ({
+  startGsiServer: vi.fn().mockResolvedValue(12345),
+  stopGsiServer: vi.fn(),
+  resetGsiReady: vi.fn(),
+  waitForGsiReady: vi.fn().mockResolvedValue(true),
+  awaitGsiAllplayerSlots: vi.fn().mockResolvedValue(new Map()),
+  getCurrentGsiPlayerSteamId: vi.fn().mockReturnValue(null),
+  getLatestGsiTimestamp: vi.fn().mockReturnValue(Date.now()),
+  awaitGsiFreshSteamId: vi.fn().mockResolvedValue(null),
+  getLatestGsiPayload: vi.fn().mockReturnValue(null)
+}))
+
+vi.mock('../../src/main/cs2-config-backup', () => ({
+  snapshotUserConfigs: vi.fn(),
+  restoreUserConfigs: vi.fn(),
+  hasSnapshot: vi.fn().mockReturnValue(false)
 }))
 
 vi.mock('../../src/main/video-post-processor', () => ({
@@ -179,17 +200,22 @@ describe('RecordingOrchestrator', () => {
     expect(result.clips[0].success).toBe(true)
     expect(result.clips[1].success).toBe(true)
 
-    // Verify per-clip injection: initial pause + 2 clips × (seek + setup) + 1 inter-clip pause = 6
-    expect(mockInjectTimedSequence).toHaveBeenCalledTimes(6)
+    // Verify per-clip injection: 
+    // Clip 1: seek(1) + resume(2) + spec(3) + hideconsole(4) = 4 calls
+    // Clip 2: pause + seek(5) + resume(6) + spec(7) + hideconsole(8) + resume = 8 calls
+    // Plus warmup cvars call = 9 total
+    expect(mockInjectTimedSequence).toHaveBeenCalledTimes(9)
 
-    // First seek call per clip should start with demo_pause (bundled with gototick)
+    // First seek call should be prepareSegmentPlayback for clip 1
+    // Call order: [0]=warmup, [1]=clip1 seek, [2]=clip1 resume, [3]=clip1 spec, [4]=clip1 hideconsole
+    //            [5]=clip2 seek (after pause), [6]=clip2 resume, [7]=clip2 spec, [8]=clip2 hideconsole
     const seek1steps = mockInjectTimedSequence.mock.calls[1][0]
     expect(seek1steps[0].cmd).toBe('demo_pause')
     expect(seek1steps[2].cmd).toBe('demo_gototick 9680')
-    expect(seek1steps[3].cmd).toBe('demo_resume')
+    
+    // OBS should start AFTER prepareSegmentPlayback completes
     expect(mockObsStartRecording).toHaveBeenCalled()
     expect(mockObsStopRecording).toHaveBeenCalled()
-    expect(mockSplitVideo).toHaveBeenCalled()
     expect(mockTerminate).toHaveBeenCalled()
   })
 
@@ -199,9 +225,15 @@ describe('RecordingOrchestrator', () => {
     await vi.advanceTimersByTimeAsync(80_000)
     await recordPromise
 
-    // First injection should be demo_pause
-    const firstCall = mockInjectTimedSequence.mock.calls[0][0]
-    expect(firstCall[0].cmd).toBe('demo_pause')
+    // prepareSegmentPlayback should call demo_pause before OBS starts
+    // Call [0] is warmup, [1] is clip1 seek (first step of prepareSegmentPlayback)
+    const seekCall = mockInjectTimedSequence.mock.calls[1][0]
+    expect(seekCall[0].cmd).toBe('demo_pause')
+    
+    // OBS start should happen after prepareSegmentPlayback
+    const obsStartOrder = mockObsStartRecording.mock.invocationCallOrder[0]
+    const seekOrder = mockInjectTimedSequence.mock.invocationCallOrder[1]
+    expect(seekOrder).toBeLessThan(obsStartOrder)
   })
 
   it('should bundle demo_pause + gototick in same injection batch', async () => {
@@ -210,18 +242,19 @@ describe('RecordingOrchestrator', () => {
     await vi.advanceTimersByTimeAsync(80_000)
     await recordPromise
 
-    // Call order: [0]=init pause, [1]=clip1 seek, [2]=clip1 setup, [3]=inter pause, [4]=clip2 seek, [5]=clip2 setup
+    // Call order: [0]=warmup, [1]=clip1 seek, [2]=clip1 resume, [3]=clip1 spec, [4]=clip1 hideconsole
+    //            [5]=clip2 seek, [6]=clip2 resume, [7]=clip2 spec, [8]=clip2 hideconsole
 
-    // Clip 1 seek: steps[0]=demo_pause, steps[1]=demo_timescale 1, steps[2]=demo_gototick, steps[3]=demo_resume
+    // Clip 1 seek: steps[0]=demo_pause, steps[1]=demo_timescale 1, steps[2]=demo_gototick
     const clip1seek = mockInjectTimedSequence.mock.calls[1][0]
     expect(clip1seek[0].cmd).toBe('demo_pause')
     expect(clip1seek[1].cmd).toBe('demo_timescale 1')
     expect(clip1seek[2].cmd).toBe('demo_gototick 9680')
-    expect(clip1seek[3].cmd).toBe('demo_resume')
     expect(clip1seek[2].delay).toBe(3500)
 
-    // Clip 2 seek
-    const clip2seek = mockInjectTimedSequence.mock.calls[4][0]
+    // Clip 2 seek (after pause)
+    const clip2seek = mockInjectTimedSequence.mock.calls[5][0]
+    expect(clip2seek[0].cmd).toBe('demo_pause')
     expect(clip2seek[2].cmd).toBe('demo_gototick 19680')
   })
 
@@ -231,14 +264,18 @@ describe('RecordingOrchestrator', () => {
     await vi.advanceTimersByTimeAsync(80_000)
     await recordPromise
 
-    // Call order: [0]=init pause, [1]=clip1 seek, [2]=clip1 setup, [3]=inter pause, [4]=clip2 seek, [5]=clip2 setup
-    const setup1call = mockInjectTimedSequence.mock.calls[2][0]
-    expect(setup1call[0].cmd).toBe('spec_mode 5')
-    expect(setup1call[1].cmd).toBe('spec_player s1mple')
+    // Call order: [0]=warmup, [1]=clip1 seek, [2]=clip1 resume, [3]=clip1 spec, [4]=clip1 hideconsole
+    //            [5]=clip2 seek, [6]=clip2 resume, [7]=clip2 spec, [8]=clip2 hideconsole
+    
+    // Clip 1 spec_player (call [3])
+    const spec1call = mockInjectTimedSequence.mock.calls[3][0]
+    expect(spec1call[0].cmd).toBe('spec_mode 5')
+    expect(spec1call[1].cmd).toBe('spec_player s1mple')
 
-    const setup2call = mockInjectTimedSequence.mock.calls[5][0]
-    expect(setup2call[0].cmd).toBe('spec_mode 5')
-    expect(setup2call[1].cmd).toBe('spec_player ZywOo')
+    // Clip 2 spec_player (call [7])
+    const spec2call = mockInjectTimedSequence.mock.calls[7][0]
+    expect(spec2call[0].cmd).toBe('spec_mode 5')
+    expect(spec2call[1].cmd).toBe('spec_player ZywOo')
   })
 
   it('should handle OBS connection failure', async () => {
@@ -263,8 +300,9 @@ describe('RecordingOrchestrator', () => {
     const recordPromise = orchestrator.record(mockRequest)
     await vi.advanceTimersByTimeAsync(80_000)
     const result = await recordPromise
-    // Should still complete, clips may be empty/wrong but flow continues
-    expect(mockObsStopRecording).toHaveBeenCalled()
+    // prepareSegmentPlayback fails, so clips should be marked as failed
+    expect(result.clips[0].success).toBe(false)
+    expect(result.clips[0].error).toBe('Failed to prepare target POV')
   })
 
   it('should cancel recording when cancel() is called', async () => {

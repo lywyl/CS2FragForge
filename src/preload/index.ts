@@ -186,4 +186,4 @@ const electronAPI: ElectronAPI = {
   windowClose: () => ipcRenderer.send(IPC_CHANNELS.WINDOW_CLOSE)
 }
 
-contextBridge.exposeInMainWorld('electronAPI', electronAPI)ld('electronAPI', electronAPI)
+contextBridge.exposeInMainWorld('electronAPI', electronAPI)
